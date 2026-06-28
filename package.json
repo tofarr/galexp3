@@ -14,7 +14,9 @@
     "spec:simulate": "quint simulate --max-samples=1000 --max-steps=10 quint/galaxy.qnt",
     "spec:check": "quint typecheck quint/galaxy.qnt"
   },
-  "dependencies": {},
+  "dependencies": {
+    "pixi.js": "^8.19.0"
+  },
   "devDependencies": {
     "@informalsystems/quint": "^0.22.0",
     "@types/node": "^22.10.0",

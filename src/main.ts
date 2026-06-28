@@ -1,11 +1,8 @@
 /**
  * Application entry point.
  *
- * Iter 1a — UI shell with menu + game views.
- *
- * This file is glue between src/sim/galaxy and the DOM. It is intentionally
- * not part of the spec; UI flow is verified by manual browser checks until
- * the UI grows complex enough to warrant Quint coverage.
+ * Iter 1a — UI shell with menu + game views, plus an animated
+ * PixiJS vortex background on the menu.
  *
  * View routing (in-file state machine):
  *
@@ -25,10 +22,12 @@ import {
   initGalaxy,
   isValidGalaxy,
 } from '@sim/galaxy';
+import { mountMenuBackground, type MenuBackground } from './ui/menuBackground';
 
 type AppView = 'menu' | 'game';
 
 const menuView = document.getElementById('menu-view') as HTMLElement;
+const menuBg = document.getElementById('menu-bg') as HTMLElement;
 const gameView = document.getElementById('game-view') as HTMLElement;
 const backLink = document.getElementById('back-link') as HTMLAnchorElement;
 const headerSubtitle = document.getElementById('header-subtitle') as HTMLElement;
@@ -47,7 +46,7 @@ const jsonOut = document.getElementById('galaxy-json') as HTMLPreElement;
 const statusEl = document.getElementById('status') as HTMLDivElement;
 
 const requiredElements = {
-  menuView, gameView, backLink, headerSubtitle,
+  menuView, menuBg, gameView, backLink, headerSubtitle,
   newGameBtn, loadGameBtn,
   sizeSelect, seedInput, generateBtn, randomSeedBtn,
   statCount, statRadius, statValid, jsonOut, statusEl,
@@ -56,15 +55,39 @@ for (const [name, el] of Object.entries(requiredElements)) {
   if (!el) throw new Error(`main.ts: required DOM element missing: ${name}`);
 }
 
-let currentView: AppView = 'menu';
+let menuBackground: MenuBackground | null = null;
+let menuBackgroundPromise: Promise<MenuBackground> | null = null;
+
+/**
+ * Lazily mount the menu background on first menu visit.
+ * Subsequent calls return the cached handle. Idempotent.
+ */
+function ensureMenuBackground(): Promise<MenuBackground> {
+  if (menuBackground) return Promise.resolve(menuBackground);
+  if (menuBackgroundPromise) return menuBackgroundPromise;
+  menuBackgroundPromise = mountMenuBackground({ container: menuBg })
+    .then((bg) => {
+      menuBackground = bg;
+      menuBackgroundPromise = null;
+      console.info(`menu background mounted (mode=${bg.mode})`);
+      return bg;
+    })
+    .catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('Failed to mount menu background:', msg, err);
+      menuBackgroundPromise = null;
+      throw err;
+    });
+  return menuBackgroundPromise;
+}
 
 function showView(view: AppView): void {
-  currentView = view;
   if (view === 'menu') {
     menuView.classList.remove('hidden');
     gameView.classList.add('hidden');
     backLink.classList.add('hidden');
     headerSubtitle.textContent = 'Iteration 1a — galaxy data model';
+    ensureMenuBackground().catch(() => { /* logged in ensureMenuBackground */ });
   } else {
     menuView.classList.add('hidden');
     gameView.classList.remove('hidden');
@@ -133,11 +156,8 @@ function generateGalaxyInView(): void {
   }
 }
 
-// ---- Menu → Game transitions ----
-
 function startNewGame(): void {
   showView('game');
-  // Seed 42 / Large is a friendly default for a "first look" galaxy.
   sizeSelect.value = 'Large';
   seedInput.value = '42';
   generateGalaxyInView();
@@ -145,8 +165,6 @@ function startNewGame(): void {
 }
 
 function startLoadGame(): void {
-  // Persistence layer (Iter 2) will replace this body. For now we surface
-  // the fact that load is a stub and drop the user into a demo galaxy.
   showView('game');
   sizeSelect.value = 'Large';
   seedInput.value = '42';
@@ -174,6 +192,6 @@ randomSeedBtn.addEventListener('click', () => {
 sizeSelect.addEventListener('change', generateGalaxyInView);
 seedInput.addEventListener('change', generateGalaxyInView);
 
-// Initial view: menu.
+// Initial view: menu (which also kicks off the background mount).
 showView('menu');
 setStatus('Ready.', '');

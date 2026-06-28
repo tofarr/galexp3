@@ -37,13 +37,100 @@
 
       /* ---- menu view ---- */
       #menu-view {
+        position: relative;
         display: flex;
         align-items: center;
         justify-content: center;
         min-height: calc(100vh - 49px); /* viewport minus header */
         padding: 40px 20px;
+        overflow: hidden;
+      }
+      /* PixiJS canvas mounts into #menu-bg; positioned to fill the menu view. */
+      #menu-bg {
+        position: absolute;
+        inset: 0;
+        z-index: 0;
+        pointer-events: none;
+        overflow: hidden;
+        background: #02030a;
+      }
+      #menu-bg canvas {
+        display: block;
+        width: 100% !important;
+        height: 100% !important;
+      }
+
+      /* ---- CSS vortex fallback (used when WebGL is unavailable) ----
+         Three stacked layers:
+           .vortex-stars  — sparse white dots on dark base
+           .vortex-swirl  — conic gradient rotated slowly (the "spiral")
+           .vortex-glow   — soft radial bloom at the centre
+         All animation is CSS transform-only — no per-frame JS.        */
+      .vortex-bg {
+        position: absolute;
+        inset: 0;
+        overflow: hidden;
+      }
+      .vortex-bg > div { position: absolute; inset: 0; }
+      .vortex-stars {
+        background:
+          radial-gradient(1px 1px at 12% 18%, #fff 50%, transparent 51%),
+          radial-gradient(1px 1px at 84% 26%, #fff 50%, transparent 51%),
+          radial-gradient(1px 1px at 33% 71%, #fff 50%, transparent 51%),
+          radial-gradient(1px 1px at 67% 84%, #fff 50%, transparent 51%),
+          radial-gradient(1px 1px at 50%  8%, #fff 50%, transparent 51%),
+          radial-gradient(1px 1px at 22% 47%, #fff 50%, transparent 51%),
+          radial-gradient(1px 1px at 78% 56%, #fff 50%, transparent 51%),
+          radial-gradient(1px 1px at 41% 92%, #fff 50%, transparent 51%),
+          radial-gradient(1px 1px at 90% 73%, #fff 50%, transparent 51%),
+          radial-gradient(1px 1px at  5% 88%, #fff 50%, transparent 51%),
+          radial-gradient(2px 2px at 60% 38%, #b8d0ff 50%, transparent 51%),
+          radial-gradient(2px 2px at 28% 12%, #ffd2a8 50%, transparent 51%),
+          radial-gradient(1px 1px at 70% 60%, #fff 50%, transparent 51%),
+          radial-gradient(1px 1px at 18% 60%, #fff 50%, transparent 51%),
+          radial-gradient(1px 1px at 96% 44%, #fff 50%, transparent 51%);
+        opacity: 0.85;
+      }
+      .vortex-swirl {
+        background:
+          conic-gradient(
+            from 0deg at 50% 50%,
+            #0a0d1c 0deg,
+            #1b2a55 35deg,
+            #6b3a8c 75deg,
+            #c34f7a 120deg,
+            #f08a3c 160deg,
+            #1b2a55 200deg,
+            #0a0d1c 250deg,
+            #1b2a55 300deg,
+            #0a0d1c 360deg
+          );
+        mix-blend-mode: screen;
+        opacity: 0.55;
+        transform-origin: 50% 50%;
+        animation: vortex-spin 28s linear infinite;
+        filter: blur(22px);
+      }
+      .vortex-glow {
+        background: radial-gradient(
+          ellipse at 50% 50%,
+          rgba(255, 200, 140, 0.35) 0%,
+          rgba(80, 30, 120, 0.18) 30%,
+          rgba(0, 0, 0, 0) 65%
+        );
+        animation: vortex-pulse 7s ease-in-out infinite alternate;
+      }
+      @keyframes vortex-spin {
+        from { transform: rotate(0deg)   scale(1.05); }
+        to   { transform: rotate(360deg) scale(1.20); }
+      }
+      @keyframes vortex-pulse {
+        from { opacity: 0.70; transform: scale(1.0); }
+        to   { opacity: 1.00; transform: scale(1.15); }
       }
       .menu-card {
+        position: relative;
+        z-index: 1;
         max-width: 460px;
         width: 100%;
         background: var(--panel);
@@ -147,6 +234,7 @@
          Menu view (default landing)
          ==================================================================== -->
     <section id="menu-view" class="view" aria-label="Main menu">
+      <div id="menu-bg" aria-hidden="true"></div>
       <div class="menu-card" role="dialog" aria-labelledby="game-title">
         <h2 id="game-title" class="game-title">Galactic Expansion</h2>
         <div class="game-tagline">4X Space Strategy</div>

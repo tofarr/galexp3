@@ -67,3 +67,24 @@ src/
 - `npm run spec` — pass-through to `quint` CLI.
 - `npm run spec:check` — `quint typecheck quint/galaxy.qnt`.
 - `npm run spec:simulate` — bounded simulator run of the spec.
+
+## Environment notes — PixiJS in headless / no-GPU sandboxes
+
+- The dev sandbox browser **does not expose WebGL/WebGL2** —
+  `canvas.getContext('webgl2')` returns null. This is silent and easy to
+  miss. PixiJS's `autoDetectRenderer` then falls back to **CanvasRenderer**
+  (renderer type 4), which **has no GPU filter / shader pipeline** — so
+  any `Filter` attached to a DisplayObject simply does nothing visually.
+- When debugging "filter has no visible effect", first verify the active
+  renderer type via `app.renderer.type` — must be `1` (WEBGL) or `2`
+  (WEBGPU) for filters to run.
+- The menu background in this codebase has **two render paths** selected
+  by `webglAvailable()` at mount time:
+    - WebGL → `mountShaderVortex()` (PixiJS GlProgram + Filter)
+    - no WebGL → `mountCssVortex()` (CSS conic + radial gradients)
+  This keeps the menu visible in any environment while preserving the
+  shader code for real-browser use.
+- Future PixiJS work: always sanity-check `app.renderer.type` after init.
+  If it's 4 (CANVAS), GPU features won't run and you'll spend hours
+  debugging filters that silently no-op.
+
