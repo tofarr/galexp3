@@ -13,14 +13,117 @@
         --accent: #6fb8ff;
         --border: #1d2230;
         --panel: #0d1018;
+        --panel-2: #11151f;
       }
       html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--fg); font-family: ui-sans-serif, system-ui, sans-serif; font-size: 14px; line-height: 1.45; }
-      header { padding: 14px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: baseline; gap: 14px; }
-      header h1 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: 0.04em; }
-      header .subtitle { color: var(--muted); font-size: 12px; }
+      a { color: var(--accent); text-decoration: none; }
+      a:hover { text-decoration: underline; }
+
+      /* ---- shared header ---- */
+      header.app-header {
+        padding: 14px 20px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: baseline;
+        gap: 14px;
+      }
+      header.app-header h1 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: 0.04em; }
+      header.app-header .subtitle { color: var(--muted); font-size: 12px; }
+      header.app-header .spacer { flex: 1; }
+
+      /* ---- views ---- */
+      .view.hidden { display: none !important; }
+      .hidden { display: none !important; }
+
+      /* ---- menu view ---- */
+      #menu-view {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: calc(100vh - 49px); /* viewport minus header */
+        padding: 40px 20px;
+      }
+      .menu-card {
+        max-width: 460px;
+        width: 100%;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 32px;
+        text-align: center;
+      }
+      .menu-card .game-title {
+        font-size: 28px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        margin: 0 0 4px 0;
+        background: linear-gradient(180deg, #d6e6ff 0%, #6fb8ff 100%);
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+      }
+      .menu-card .game-tagline {
+        color: var(--muted);
+        font-size: 13px;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        margin-bottom: 28px;
+      }
+      .menu-card .menu-buttons { display: flex; flex-direction: column; gap: 10px; }
+      .menu-card button.menu-btn {
+        background: var(--panel-2);
+        color: var(--fg);
+        border: 1px solid var(--border);
+        padding: 14px 20px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 15px;
+        font-weight: 500;
+        letter-spacing: 0.04em;
+        transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+        text-align: left;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      .menu-card button.menu-btn:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+        background: var(--panel);
+      }
+      .menu-card button.menu-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        border-color: var(--border);
+        color: var(--muted);
+      }
+      .menu-card button.menu-btn .label { font-size: 15px; }
+      .menu-card button.menu-btn .hint {
+        font-size: 11px;
+        color: var(--muted);
+        letter-spacing: 0.03em;
+        margin-top: 2px;
+        font-weight: 400;
+      }
+      .menu-card .menu-footer {
+        margin-top: 22px;
+        color: var(--muted);
+        font-size: 11px;
+        letter-spacing: 0.04em;
+      }
+
+      /* ---- game view ---- */
       main { padding: 20px; max-width: 1100px; margin: 0 auto; }
       .row { display: flex; gap: 14px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
-      button { background: var(--panel); color: var(--fg); border: 1px solid var(--border); padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+      button {
+        background: var(--panel);
+        color: var(--fg);
+        border: 1px solid var(--border);
+        padding: 6px 12px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 13px;
+      }
       button:hover { border-color: var(--accent); color: var(--accent); }
       select { background: var(--panel); color: var(--fg); border: 1px solid var(--border); padding: 5px 8px; border-radius: 4px; font-size: 13px; }
       .stat { display: inline-block; padding: 2px 8px; background: var(--panel); border: 1px solid var(--border); border-radius: 3px; font-family: ui-monospace, "SF Mono", monospace; font-size: 12px; color: var(--muted); }
@@ -29,33 +132,64 @@
       #status { color: var(--muted); font-size: 12px; margin-top: 8px; min-height: 16px; }
       #status.ok { color: #6bd58f; }
       #status.err { color: #ff7b7b; }
+      .back-link { font-size: 12px; color: var(--muted); }
     </style>
   </head>
   <body>
-    <header>
+    <header class="app-header">
       <h1>galexp3</h1>
-      <span class="subtitle">Iteration 1a — galaxy data model boot test</span>
+      <span class="subtitle" id="header-subtitle">Iteration 1a — galaxy data model</span>
+      <span class="spacer"></span>
+      <a href="#" id="back-link" class="back-link hidden">← Back to menu</a>
     </header>
-    <main>
-      <div class="row">
-        <label for="size-select">Galaxy size:</label>
-        <select id="size-select">
-          <option value="Small">Small (24 stars)</option>
-          <option value="Medium">Medium (33 stars)</option>
-          <option value="Large" selected>Large (48 stars)</option>
-          <option value="Huge">Huge (72 stars)</option>
-        </select>
-        <label for="seed-input">Seed:</label>
-        <input id="seed-input" type="number" value="42" style="background:var(--panel);color:var(--fg);border:1px solid var(--border);padding:5px 8px;border-radius:4px;font-size:13px;width:110px;" />
-        <button id="generate-btn">Generate</button>
-        <button id="random-seed-btn">Random seed</button>
-        <span id="stat-count" class="stat">stars: <b>–</b></span>
-        <span id="stat-radius" class="stat">radius: <b>–</b></span>
-        <span id="stat-valid" class="stat">isValidGalaxy: <b>–</b></span>
+
+    <!-- ====================================================================
+         Menu view (default landing)
+         ==================================================================== -->
+    <section id="menu-view" class="view" aria-label="Main menu">
+      <div class="menu-card" role="dialog" aria-labelledby="game-title">
+        <h2 id="game-title" class="game-title">Galactic Expansion</h2>
+        <div class="game-tagline">4X Space Strategy</div>
+        <div class="menu-buttons">
+          <button id="new-game-btn" class="menu-btn" type="button">
+            <span class="label">New Game</span>
+            <span class="hint">Generate a fresh galaxy and begin a new empire.</span>
+          </button>
+          <button id="load-game-btn" class="menu-btn" type="button">
+            <span class="label">Load Game</span>
+            <span class="hint">Resume a saved game. (Not yet implemented.)</span>
+          </button>
+        </div>
+        <div class="menu-footer">v0.0.1 · Iteration 1a</div>
       </div>
-      <div id="galaxy-json">// Click "Generate" to build a galaxy.</div>
-      <div id="status">Ready.</div>
-    </main>
+    </section>
+
+    <!-- ====================================================================
+         Game view (entered via menu)
+         ==================================================================== -->
+    <section id="game-view" class="view hidden" aria-label="Game view">
+      <main>
+        <div class="row">
+          <label for="size-select">Galaxy size:</label>
+          <select id="size-select">
+            <option value="Small">Small (24 stars)</option>
+            <option value="Medium">Medium (33 stars)</option>
+            <option value="Large" selected>Large (48 stars)</option>
+            <option value="Huge">Huge (72 stars)</option>
+          </select>
+          <label for="seed-input">Seed:</label>
+          <input id="seed-input" type="number" value="42" style="background:var(--panel);color:var(--fg);border:1px solid var(--border);padding:5px 8px;border-radius:4px;font-size:13px;width:110px;" />
+          <button id="generate-btn">Generate</button>
+          <button id="random-seed-btn">Random seed</button>
+          <span id="stat-count" class="stat">stars: <b>–</b></span>
+          <span id="stat-radius" class="stat">radius: <b>–</b></span>
+          <span id="stat-valid" class="stat">isValidGalaxy: <b>–</b></span>
+        </div>
+        <div id="galaxy-json">// Click "Generate" to build a galaxy.</div>
+        <div id="status">Ready.</div>
+      </main>
+    </section>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
