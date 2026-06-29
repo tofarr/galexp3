@@ -1,6 +1,6 @@
 {
   "name": "galexp3",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "private": true,
   "type": "module",
   "description": "Browser-based 4X space game (Master of Orion / Galactic Civilizations style).",

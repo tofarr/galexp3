@@ -1,8 +1,8 @@
 /**
  * Application entry point.
  *
- * Iter 1b — galaxy data model + menu (kept from 1a) plus the star
- * map view (PixiJS renderer + side panel + camera + selection).
+ * Iter 1d — added Gaussian-blur bloom on star halos (kept galaxy
+ * data model from 1a, starmap from 1b, star appearance from 1c).
  *
  * View routing (in-file state machine):
  *
@@ -307,7 +307,7 @@ function showView(view: AppView): void {
     menuView.classList.add('hidden');
     gameView.classList.remove('hidden');
     backLink.classList.remove('hidden');
-    headerSubtitle.textContent = 'Iteration 1b — galaxy starmap';
+    headerSubtitle.textContent = 'Iteration 1d — gaussian-blurred star halos';
   }
 }
 

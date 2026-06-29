@@ -1,11 +1,18 @@
 /**
  * PixiJS renderer for the galaxy star map.
  *
- * Iteration 1b. Thin render layer that reads pure camera + selection
- * state from `src/sim/starmap.ts` and paints it. All pixel layout
- * decisions (world-to-screen transform, viewport centring, aspect
- * handling) come from the sim layer — this module is a dumb
- * projection of state into shapes.
+ * Iteration 1d. Adds a Gaussian-blurred bloom layer on each
+ * star: the halo (atmospheric scatter) is rendered into a
+ * per-star Container wrapped in a BlurFilter, while the body
+ * and diffraction spikes are kept sharp. Bloom strength scales
+ * with star size so supergiants get the most dramatic scatter
+ * and dwarfs stay tight.
+ *
+ * Reads pure camera + selection state from `src/sim/starmap.ts`
+ * and paints it. All pixel layout decisions (world-to-screen
+ * transform, viewport centring, aspect handling) come from the
+ * sim layer — this module is a dumb projection of state into
+ * shapes.
  *
  * Three layers (back to front):
  *   - disc background  (filled circle)
@@ -18,7 +25,7 @@
  * camera. Selection changes just toggle the ring.
  */
 
-import { Application, Container, Graphics } from 'pixi.js';
+import { Application, BlurFilter, Container, Graphics, Rectangle } from 'pixi.js';
 import {
   HIT_RADIUS_PX,
   NO_SELECTION,
@@ -31,6 +38,7 @@ import {
   type Viewport,
 } from '../sim/starmap';
 import {
+  STAR_BLUR_PX_FOR_SIZE,
   STAR_BODY_ALPHA,
   STAR_COLOR_FOR_KIND,
   STAR_GLOW_ALPHA,
@@ -182,47 +190,59 @@ export async function mountStarmap(
       const glowColor = isSelected
         ? COLOR_STAR_SELECTED
         : parseHexColor(STAR_GLOW_COLOR_FOR_KIND[s.kind]);
+      const blurStrength = STAR_BLUR_PX_FOR_SIZE[sizeClass];
 
-      const g = new Graphics();
-
-      // Glow halo: a larger, low-alpha circle behind the body. Drawn
-      // first so the body sits on top.
-      g.circle(0, 0, glowRadius).fill({ color: glowColor, alpha: STAR_GLOW_ALPHA / 255 });
-
-      // Optional inner glow (smaller, mid alpha) to give the halo a
-      // bit of falloff — reads as a soft bloom rather than a flat
-      // ring of colour.
-      g.circle(0, 0, bodyRadius + Math.max(1, Math.floor(bodyRadius / 2)))
+      // Halo: a single Graphics holding two stacked glow circles,
+      // run through a BlurFilter. The soft scatter around the bright
+      // body gives the impression of atmospheric bloom; the body and
+      // spikes below stay sharp.
+      const halo = new Graphics();
+      halo.circle(0, 0, glowRadius).fill({
+        color: glowColor,
+        alpha: STAR_GLOW_ALPHA / 255,
+      });
+      halo.circle(0, 0, bodyRadius + Math.max(1, Math.floor(bodyRadius / 2)))
         .fill({ color: glowColor, alpha: (STAR_GLOW_ALPHA * 2) / 255 });
+      // filterArea must contain the halo radius plus ~3x the blur
+      // kernel — otherwise PixiJS clips the blurred pixels.
+      const filterHalf = Math.ceil(glowRadius + blurStrength * 3 + 2);
+      halo.filterArea = new Rectangle(
+        -filterHalf,
+        -filterHalf,
+        filterHalf * 2,
+        filterHalf * 2,
+      );
+      halo.filters = [new BlurFilter({ strength: blurStrength })];
+      halo.x = p.sx;
+      halo.y = p.sy;
+      starsLayer.addChild(halo);
 
-      // Body: opaque, saturated.
-      g.circle(0, 0, bodyRadius).fill({
+      // Body: opaque disc + diffraction spikes (Giant/Supergiant only).
+      // Kept sharp — no filter — so the star reads as a point of
+      // light against the soft halo.
+      const body = new Graphics();
+      body.circle(0, 0, bodyRadius).fill({
         color: bodyColor,
         alpha: STAR_BODY_ALPHA / 255,
       });
-
-      // Diffraction spikes for the brighter size classes (Giant and
-      // Supergiant). Two thin crossing lines give a four-point
-      // starburst that reads as "this star is very bright".
       if (sizeClass === 'Giant' || sizeClass === 'Supergiant') {
         const spikeLen = bodyRadius * 5;
         const spikeWidth = sizeClass === 'Supergiant' ? 0.8 : 0.5;
         const spikeAlpha = sizeClass === 'Supergiant' ? 0.6 : 0.45;
-        g.moveTo(-spikeLen, 0).lineTo(spikeLen, 0).stroke({
+        body.moveTo(-spikeLen, 0).lineTo(spikeLen, 0).stroke({
           color: bodyColor,
           width: spikeWidth,
           alpha: spikeAlpha,
         });
-        g.moveTo(0, -spikeLen).lineTo(0, spikeLen).stroke({
+        body.moveTo(0, -spikeLen).lineTo(0, spikeLen).stroke({
           color: bodyColor,
           width: spikeWidth,
           alpha: spikeAlpha,
         });
       }
-
-      g.x = p.sx;
-      g.y = p.sy;
-      starsLayer.addChild(g);
+      body.x = p.sx;
+      body.y = p.sy;
+      starsLayer.addChild(body);
     }
   }
 

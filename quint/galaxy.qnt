@@ -184,6 +184,17 @@ module galaxy {
     else if (s == Giant)     4
     else 5  // Supergiant
 
+  /// Gaussian-blur strength (in pixels) applied to the glow halo of a
+  /// star of the given size. Larger stars get a wider, softer bloom;
+  /// dwarfs get a tight, subtle glow. The blur is applied only to the
+  /// halo layer — the body and diffraction spikes stay sharp so the
+  /// star reads as a point of light surrounded by scatter.
+  pure def STAR_BLUR_PX(s: StarSize): int =
+    if (s == Dwarf)        2
+    else if (s == Standard)  4
+    else if (s == Giant)     7
+    else 10   // Supergiant
+
   /// Glow halo radius as a multiple of the star body radius.
   /// A single value for all sizes — keeps the visual language
   /// consistent.
@@ -191,7 +202,10 @@ module galaxy {
 
   /// Glow halo alpha (0..255) for the soft outer halo. A single
   /// value for all sizes.
-  pure def STAR_GLOW_ALPHA: int = 64   // ~0.25
+  pure def STAR_GLOW_ALPHA: int = 110  // ~0.43 — bumped so the
+                                          // gaussian-blurred bloom
+                                          // reads against the dark
+                                          // background
 
   /// Body alpha (0..255). Opaque bodies keep the visual punch.
   pure def STAR_BODY_ALPHA: int = 255
@@ -296,4 +310,12 @@ module galaxy {
     STAR_RADIUS_PX(Supergiant) > STAR_RADIUS_PX(Giant)
     and STAR_RADIUS_PX(Giant)     > STAR_RADIUS_PX(Standard)
     and STAR_RADIUS_PX(Standard)  > STAR_RADIUS_PX(Dwarf)
+
+  /// Static assertion that blur strength follows the same ordering as
+  /// size: bigger stars get a wider bloom. Anchors the visual contract
+  /// that Supergiants read as more luminous than Dwarfs.
+  run starBlurOrdering =
+    STAR_BLUR_PX(Supergiant) > STAR_BLUR_PX(Giant)
+    and STAR_BLUR_PX(Giant)     > STAR_BLUR_PX(Standard)
+    and STAR_BLUR_PX(Standard)  > STAR_BLUR_PX(Dwarf)
 }

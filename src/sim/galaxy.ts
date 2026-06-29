@@ -93,11 +93,30 @@ export const STAR_RADIUS_PX_FOR_SIZE: Record<StarSize, number> = {
   Supergiant: 5,
 };
 
+/**
+ * Gaussian-blur strength (in pixels) applied to the glow halo of a
+ * star of the given size. Mirror of STAR_BLUR_PX in quint/galaxy.qnt.
+ * Larger stars get a wider, softer bloom; dwarfs get a tight, subtle
+ * glow. The blur is applied only to the halo layer — the body and
+ * diffraction spikes stay sharp so the star reads as a point of
+ * light surrounded by scatter.
+ */
+export const STAR_BLUR_PX_FOR_SIZE: Record<StarSize, number> = {
+  Dwarf: 2,
+  Standard: 4,
+  Giant: 7,
+  Supergiant: 10,
+};
+
 /** Glow halo radius as a multiple of the body radius. */
 export const STAR_GLOW_RATIO = 3;
 
-/** Glow halo alpha (0..255). ~0.25. */
-export const STAR_GLOW_ALPHA = 64;
+/**
+ * Glow halo alpha (0..255). ~0.43. Bumped from the original 0.25 so
+ * the gaussian-blurred bloom reads clearly against the dark blue
+ * galaxy disc.
+ */
+export const STAR_GLOW_ALPHA = 110;
 
 /** Body alpha (0..255). */
 export const STAR_BODY_ALPHA = 255;

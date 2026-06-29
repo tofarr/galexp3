@@ -11,6 +11,7 @@ import {
   GALAXY_SIZES,
   GalaxySize,
   RADIUS_FOR_SIZE,
+  STAR_BLUR_PX_FOR_SIZE,
   STAR_BODY_ALPHA,
   STAR_COLOR_FOR_KIND,
   STAR_COUNT_FOR_SIZE,
@@ -263,6 +264,21 @@ describe('star appearance tables', () => {
     );
     expect(STAR_RADIUS_PX_FOR_SIZE.Giant).toBeLessThan(
       STAR_RADIUS_PX_FOR_SIZE.Supergiant,
+    );
+  });
+
+  it('blur strength is positive and follows the same size ordering', () => {
+    for (const s of STAR_SIZES) {
+      expect(STAR_BLUR_PX_FOR_SIZE[s]).toBeGreaterThan(0);
+    }
+    expect(STAR_BLUR_PX_FOR_SIZE.Dwarf).toBeLessThan(
+      STAR_BLUR_PX_FOR_SIZE.Standard,
+    );
+    expect(STAR_BLUR_PX_FOR_SIZE.Standard).toBeLessThan(
+      STAR_BLUR_PX_FOR_SIZE.Giant,
+    );
+    expect(STAR_BLUR_PX_FOR_SIZE.Giant).toBeLessThan(
+      STAR_BLUR_PX_FOR_SIZE.Supergiant,
     );
   });
 
