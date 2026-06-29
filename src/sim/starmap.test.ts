@@ -881,6 +881,51 @@ describe('starmap — Quint <-> TS parity', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Regression: different seeds must yield different star positions even
+// when the star *ids* overlap (every galaxy reuses ids 1..N).
+// ---------------------------------------------------------------------------
+describe('starmap — galaxy regeneration produces fresh star data', () => {
+  it('two Large galaxies from different seeds share ids but not positions', () => {
+    const a = initGalaxy(42, 'Large');
+    const b = initGalaxy(1337, 'Large');
+    expect(a.stars.length).toBe(b.stars.length);
+    const aById = new Map(a.stars.map((s) => [s.id, s] as const));
+    const bById = new Map(b.stars.map((s) => [s.id, s] as const));
+    // Both should use the 1..N id range.
+    expect(aById.has(1)).toBe(true);
+    expect(bById.has(1)).toBe(true);
+    // But the star at id=1 should differ in position between galaxies.
+    const a0 = aById.get(1)!;
+    const b0 = bById.get(1)!;
+    const samePos =
+      a0.position.x === b0.position.x && a0.position.y === b0.position.y;
+    expect(samePos).toBe(false);
+  });
+
+  it('projectStar returns different screen positions for the same id across seeds', () => {
+    const a = initGalaxy(42, 'Large');
+    const b = initGalaxy(1337, 'Large');
+    const c: Camera = { pan: { x: 0, y: 0 }, zoom: 100 };
+    const v: Viewport = { width: 800, height: 600 };
+    const aById = new Map(a.stars.map((s) => [s.id, s] as const));
+    const bById = new Map(b.stars.map((s) => [s.id, s] as const));
+    // Pick a few ids and check at least one of them projects differently.
+    let foundDifference = false;
+    for (const id of [1, 2, 3, 4, 5]) {
+      const sa = aById.get(id)!;
+      const sb = bById.get(id)!;
+      const pa = projectStar(sa, c, v, a.radius);
+      const pb = projectStar(sb, c, v, b.radius);
+      if (pa.sx !== pb.sx || pa.sy !== pb.sy) {
+        foundDifference = true;
+        break;
+      }
+    }
+    expect(foundDifference).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Misc helpers exposed for the parity test (and renderer reuse)
 // ---------------------------------------------------------------------------
 

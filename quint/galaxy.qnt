@@ -246,6 +246,74 @@ module galaxy {
   pure val STAR_CORE_ALPHA: int = 255
 
   // ---------------------------------------------------------------------------
+  // Star twinkle (visual-only)
+  // ---------------------------------------------------------------------------
+  //
+  // Twinkle is a purely visual effect: each star pulses by scaling
+  // its rendered size up and back down at random intervals. It must
+  // NEVER modify the underlying Star.size value — that field is
+  // gameplay data and is verified by other invariants. The renderer
+  // applies `pulseScaleAt` as a multiplier on top of the static
+  // body / bloom / halo radii.
+
+  /// Peak scale factor at the apex of a twinkle pulse (1.0 = no
+  /// change). User-visible "increase their size by 10%" → 1.10.
+  /// Stored as an integer percentage for type uniformity (Quint has
+  /// no float); the TS side divides by 100 to recover the multiplier.
+  pure val STAR_TWINKLE_PEAK_PCT: int = 110
+
+  /// Minimum number of milliseconds between two consecutive pulses
+  /// on the same star. Keeps twinkle from being visually frantic.
+  pure val STAR_TWINKLE_INTERVAL_MIN_MS: int = 1500
+
+  /// Maximum number of milliseconds between two consecutive pulses
+  /// on the same star.
+  pure val STAR_TWINKLE_INTERVAL_MAX_MS: int = 6000
+
+  /// Minimum single-pulse duration in milliseconds (the "fast" end
+  /// of the speed range).
+  pure val STAR_TWINKLE_DURATION_MIN_MS: int = 250
+
+  /// Maximum single-pulse duration in milliseconds (the "slow"
+  /// end of the speed range).
+  pure val STAR_TWINKLE_DURATION_MAX_MS: int = 1100
+
+  /// Pulse shape: smooth triangle. `t` is normalised pulse
+  /// progress in [0, 1]; the result is the multiplicative scale to
+  /// apply to all star layers (halo, bloom, core, highlight). At
+  /// `t = 0` and `t = 1` the result is exactly 1.0; at `t = 0.5`
+  /// the result equals `STAR_TWINKLE_PEAK_PCT / 100`.
+  ///
+  /// Returns an integer scale in `[100, STAR_TWINKLE_PEAK_PCT]`
+  /// (i.e., 100 = no scale, 110 = 10% bigger at the apex). The TS
+  /// side divides by 100.
+  pure def pulseScaleAtPct(t: int): int =
+    if (t <= 0) 100
+    else if (t >= 100) 100
+    else
+      // |2t - 1| scales 0..1 across [0,100]. Subtract from 1 to get
+      // a triangle that is 1 at t=0 and t=100 and 0 at t=50.
+      // Multiply the difference by (peakPct - 100) / 100 to lift
+      // the triangle into [100, peakPct].
+      val triangle = 100 - if (2 * t > 100) (2 * t - 100) else (100 - 2 * t)
+      100 + ((STAR_TWINKLE_PEAK_PCT - 100) * triangle) / 100
+
+  /// Sanity: pulse apex equals the configured peak.
+  run pulseApexMatchesPeak =
+    pulseScaleAtPct(50) == STAR_TWINKLE_PEAK_PCT
+
+  /// Sanity: pulse endpoints return the no-scale value.
+  run pulseEndpointsAreOne =
+    pulseScaleAtPct(0) == 100 and pulseScaleAtPct(100) == 100
+
+  /// Sanity: out-of-range `t` is clamped to the endpoints (never
+  /// produces a value outside [100, peak]).
+  run pulseClampsOutOfRange =
+    pulseScaleAtPct(-50) == 100 and
+    pulseScaleAtPct(200) == 100 and
+    pulseScaleAtPct(150) == 100
+
+  // ---------------------------------------------------------------------------
   // Star naming
   // ---------------------------------------------------------------------------
 

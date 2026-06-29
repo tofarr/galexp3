@@ -51,6 +51,13 @@ import {
   starHaloPx,
   type StarColor,
 } from '../sim/galaxy';
+import {
+  advanceStarTwinkle,
+  initStarTwinkle,
+  scheduleIntervalMs,
+  type StarTwinkleState,
+} from '../sim/twinkle';
+import { mulberry32 } from '../sim/galaxy';
 
 // ---------------------------------------------------------------------------
 // Palette
@@ -156,20 +163,6 @@ function paintDust(target: Graphics, dust: DustStar[], _viewport: Viewport): voi
   }
 }
 
-/**
- * Deterministic seeded PRNG (Mulberry32). Same seed -> same sequence.
- */
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
 // ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
@@ -263,6 +256,18 @@ export async function mountStarmap(
   const dustLayer = new Graphics();
   const disc = new Graphics();
   const starsLayer = new Container();
+  // Per-star containers are added directly to starsLayer. They live
+  // at SCREEN coordinates (sx, sy) and carry the blurred glow and
+  // sharp highlight. Twinkle mutates each container's .scale on
+  // top — a uniform (sx, sx) pulse that leaves the blur filter
+  // area at its intended pixel size (the blur is in screen px; the
+  // global scale on the container just enlarges the picture).
+  //
+  // We deliberately do NOT push the camera's world scale up to the
+  // parent layer, because the BlurFilter strength is measured in
+  // pixels and would be carried through the parent's transform in
+  // an ill-behaved way. Instead we reproject each star's screen
+  // position whenever the camera changes — see paintStars().
   const selectionLayer = new Graphics();
   root.addChild(dustLayer);
   root.addChild(disc);
@@ -451,49 +456,99 @@ export async function mountStarmap(
     });
   }
 
-  function paintStars(): void {
+  // -------------------------------------------------------------------------
+  // Star cache
+  // -------------------------------------------------------------------------
+  //
+  // Stars live as direct children of starsLayer. Each has:
+  //
+  //   per-star Container
+  //     .x, .y  = screen coords (sx, sy from projectStar)
+  //     .scale  = (twinkle, twinkle) — pulse multiplier (uniform)
+  //     glow    Graphics  (halo + bloom + core, single BlurFilter)
+  //     highlight Graphics (sharp dot)
+  //
+  // Why cache at all? Without a cache, paintStars() rebuilds ~80
+  // PixiJS Graphics objects per frame during a twinkle — measurable
+  // cost. With the cache, each frame mutates one scale field per
+  // star and triggers a re-render.
+  //
+  // Why is there no global camera transform on a parent layer?
+  // Because BlurFilter strength is in pixels and the world-scale is
+  // also zoom-dependent — pushing the world scale up to a parent
+  // layer double-scales the bloom AND distorts the filter region.
+  // We instead reproject each star's (sx, sy) on every camera
+  // change. That's O(N) per camera-event (cheap for N≤200) and
+  // avoids the filter-distortion problem entirely.
+  //
+  // Cache lifecycle:
+  //   - Rebuilt from scratch on `setGalaxy` (different star set).
+  //   - On every `paintStars()` we recompute each entry's (sx, sy)
+  //     via projectStar so the camera's pan/zoom is honoured.
+  //   - Twinkle state is reseeded on rebuild so a new galaxy gets
+  //     fresh pulse timing.
+  //
+  // The twinkle is purely a visual scale overlay. Star.size is
+  // NEVER mutated here; the cache's base radii are derived from
+  // Star.size once at build time and stored on the entry.
+
+  /** Per-star render state. One entry per star in the current galaxy. */
+  interface StarRenderEntry {
+    readonly star: import('../sim/galaxy').Star;
+    readonly container: Container;
+    readonly glow: Graphics;
+    readonly highlight: Graphics;
+    /** Blur strength at scale 1.0; multiplied by twinkle scale each frame. */
+    readonly baseBlurStrength: number;
+    /** Current visual scale, cached to skip no-op .scale.set calls. */
+    lastScale: number;
+    twinkle: StarTwinkleState;
+    rng: () => number;
+  }
+
+  /** id -> entry, kept in sync with currentGalaxy.stars. */
+  let starCache: Map<number, StarRenderEntry> = new Map();
+  /** Seed for per-star twinkle PRNGs (one global; per-star rng is
+   *  forked deterministically from it so twinkle is reproducible). */
+  const TWINKLE_SEED = 0x71b3c9e4;
+
+  function rebuildStarCache(): void {
+    // Detach all current entries from the scene graph, then dispose
+    // them. removeChildren ensures no orphan Containers leak.
     starsLayer.removeChildren();
-    for (const s of currentGalaxy.stars) {
-      const p = projectStar(s, currentCamera, viewport, currentGalaxy.radius);
-      const isSelected = s.id === currentSelectedId;
-      paintStar(s.id, s.color, s.size, p.sx, p.sy, isSelected);
+    for (const entry of starCache.values()) {
+      entry.container.destroy({ children: true });
+    }
+    starCache.clear();
+    const rng = mulberry32(TWINKLE_SEED);
+    for (const star of currentGalaxy.stars) {
+      starCache.set(star.id, buildStarEntry(star, rng));
     }
   }
 
-  /**
-   * Render a single star as a layered bloom at screen position
-   * (sx, sy). All pixel choices are derived from the numeric size;
-   * there is no per-galaxy tuning.
-   */
-  function paintStar(
-    _id: number,
-    color: StarColor,
-    size: number,
-    sx: number,
-    sy: number,
-    isSelected: boolean,
-  ): void {
+  function buildStarEntry(
+    star: import('../sim/galaxy').Star,
+    rng: () => number,
+  ): StarRenderEntry {
+    const isSelected = star.id === currentSelectedId;
     const bodyRadius = Math.max(
       1,
-      Math.round(starBodyPx(size) * STAR_DISPLAY_SCALE + (isSelected ? 2 : 0)),
+      Math.round(
+        starBodyPx(star.size) * STAR_DISPLAY_SCALE + (isSelected ? 2 : 0),
+      ),
     );
-    const bloomRadius = Math.round(starBloomPx(size) * STAR_DISPLAY_SCALE);
-    const haloRadius = Math.round(starHaloPx(size) * STAR_DISPLAY_SCALE);
+    const bloomRadius = Math.round(starBloomPx(star.size) * STAR_DISPLAY_SCALE);
+    const haloRadius = Math.round(starHaloPx(star.size) * STAR_DISPLAY_SCALE);
 
     const bodyColor = isSelected
       ? COLOR_STAR_SELECTED
-      : parseHexColor(STAR_COLOR_FOR_COLOR[color]);
+      : parseHexColor(STAR_COLOR_FOR_COLOR[star.color]);
     const haloColor = isSelected
       ? COLOR_STAR_SELECTED
-      : parseHexColor(STAR_HALO_COLOR_FOR_COLOR[color]);
+      : parseHexColor(STAR_HALO_COLOR_FOR_COLOR[star.color]);
 
-    // ---- One blurred star ----------------------------------------------
-    // The glow (halo + bloom + white core) is rendered on a single
-    // Graphics so a single BlurFilter can be applied. filterArea is
-    // intentionally NOT set — PixiJS v8 auto-computes it from the
-    // children's local bounds, which (since every circle is drawn at
-    // local origin) is a rectangle centred on (0,0). The previous
-    // per-layer manual filterArea caused off-centre rendering.
+    // Blurred glow (halo + bloom + white core on one Graphics so a
+    // single BlurFilter can be applied).
     const glow = new Graphics();
     glow.circle(0, 0, haloRadius).fill({
       color: haloColor,
@@ -507,17 +562,11 @@ export async function mountStarmap(
       color: 0xffffff,
       alpha: STAR_CORE_ALPHA / 255,
     });
-    glow.filters = [
-      new BlurFilter({ strength: 2.5 * STAR_DISPLAY_SCALE * STAR_BLUR_SCALE }),
-    ];
-    glow.x = sx;
-    glow.y = sy;
-    starsLayer.addChild(glow);
+    const baseBlurStrength =
+      2.5 * STAR_DISPLAY_SCALE * STAR_BLUR_SCALE;
+    glow.filters = [new BlurFilter({ strength: baseBlurStrength })];
 
-    // ---- Sharp highlight dot ------------------------------------------
-    // Rendered separately, outside the blurred Graphics, so the very
-    // brightest stars still have a pixel-precise point of light against
-    // the soft glow.
+    // Sharp highlight dot — unblurred.
     const highlightRadius = Math.max(
       0.5,
       bodyRadius * 0.4 * STAR_DISPLAY_SCALE,
@@ -527,9 +576,132 @@ export async function mountStarmap(
       color: 0xffffff,
       alpha: 1,
     });
-    highlight.x = sx;
-    highlight.y = sy;
-    starsLayer.addChild(highlight);
+
+    const container = new Container();
+    container.addChild(glow);
+    container.addChild(highlight);
+    // Position is set later, in paintStars(), via projectStar. (We
+    // could do it here if currentCamera were already applied to the
+    // initial galaxy, but the setter pattern applies it later.)
+    container.x = 0;
+    container.y = 0;
+    starsLayer.addChild(container);
+
+    return {
+      star,
+      container,
+      glow,
+      highlight,
+      baseBlurStrength,
+      lastScale: 1,
+      twinkle: initStarTwinkle(performance.now(), scheduleIntervalMs(rng)),
+      rng,
+    };
+  }
+
+  function paintStars(): void {
+    // A wholesale galaxy replace always forces a cache rebuild, even
+    // when the new star ids happen to overlap with the old ones
+    // (every galaxy uses ids 1..N, so the id-set heuristic alone is
+    // not enough to detect that the star *set* itself changed).
+    if (galaxyDirty) {
+      rebuildStarCache();
+    } else {
+      // Defensive: if for some reason the id-set drifted (different
+      // size, a missing id), still rebuild.
+      const galaxyIds = new Set(currentGalaxy.stars.map((s) => s.id));
+      let cacheStale = starCache.size !== galaxyIds.size;
+      if (!cacheStale) {
+        for (const s of currentGalaxy.stars) {
+          if (!starCache.has(s.id)) {
+            cacheStale = true;
+            break;
+          }
+        }
+      }
+      if (cacheStale) {
+        rebuildStarCache();
+      }
+    }
+    // Reproject every star onto the current camera. O(N) and runs
+    // only on camera changes (not on twinkle ticks).
+    for (const entry of starCache.values()) {
+      const p = projectStar(
+        entry.star,
+        currentCamera,
+        viewport,
+        currentGalaxy.radius,
+      );
+      entry.container.x = p.sx;
+      entry.container.y = p.sy;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Twinkle (visual-only)
+  // -------------------------------------------------------------------------
+  //
+  // A self-driven requestAnimationFrame loop that mutates each cached
+  // star's scale (and blur strength) based on a randomised pulse
+  // schedule. Only fires a render when something actually changed;
+  // CPU cost when nothing is twinkling is a single for-loop over the
+  // star set.
+  //
+  // The loop stops when every star is idle AND no star's nextAt is
+  // imminent (within TWINKLE_LOOKAHEAD_MS). Any user interaction
+  // that rebuilds the cache re-starts the loop.
+
+  /** How far ahead (ms) we look for a star whose pulse is about to
+   *  begin; we keep the RAF loop running if any star's nextAt is
+   *  inside this window. */
+  const TWINKLE_LOOKAHEAD_MS = 100;
+
+  let twinkleRaf: number | null = null;
+
+  function twinkleShouldKeepLooping(now: number): boolean {
+    for (const entry of starCache.values()) {
+      if (entry.twinkle.pulse !== null) return true;
+      if (entry.twinkle.nextAtMs <= now + TWINKLE_LOOKAHEAD_MS) return true;
+    }
+    return false;
+  }
+
+  function twinkleTick(now: number): boolean {
+    let changed = false;
+    for (const entry of starCache.values()) {
+      const scale = advanceStarTwinkle(entry.twinkle, now, entry.rng);
+      if (Math.abs(scale - entry.lastScale) > 1e-6) {
+        entry.container.scale.set(scale, scale);
+        // Keep the glow proportional: scaling the container alone
+        // would leave the blur in pixel-space, which makes the
+        // pulse look like a "tighter" bright spot rather than a
+        // bigger soft one.
+        const filter = entry.glow.filters?.[0] as BlurFilter | undefined;
+        if (filter) {
+          filter.strength = entry.baseBlurStrength * scale;
+        }
+        entry.lastScale = scale;
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  function twinkleLoop(): void {
+    twinkleRaf = null;
+    const now = performance.now();
+    const dirty = twinkleTick(now);
+    if (dirty) {
+      app.renderer.render(app.stage);
+    }
+    if (twinkleShouldKeepLooping(now)) {
+      twinkleRaf = requestAnimationFrame(twinkleLoop);
+    }
+  }
+
+  function ensureTwinkleLoopRunning(): void {
+    if (twinkleRaf !== null) return;
+    twinkleRaf = requestAnimationFrame(twinkleLoop);
   }
 
   function paintSelectionRing(): void {
@@ -582,6 +754,10 @@ export async function mountStarmap(
     galaxyDirty = true;
     paintDirty = true;
     repaint();
+    // Start the twinkle loop now that there are stars to animate.
+    if (currentGalaxy.stars.length > 0) {
+      ensureTwinkleLoopRunning();
+    }
   }
   function renderer_setCamera(camera: Camera): void {
     currentCamera = camera;
@@ -595,6 +771,10 @@ export async function mountStarmap(
     repaint();
   }
   function renderer_destroy(): void {
+    if (twinkleRaf !== null) {
+      cancelAnimationFrame(twinkleRaf);
+      twinkleRaf = null;
+    }
     try {
       app.destroy(true, { children: true });
     } catch {
