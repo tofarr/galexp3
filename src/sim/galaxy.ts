@@ -1,132 +1,164 @@
 /**
  * Galaxy data model.
  *
- * Iteration 1a. Mirrors quint/galaxy.qnt.
- * Pure module — no I/O, no rendering, no randomness outside `initGalaxy`
- * which accepts a seeded PRNG.
+ * Iteration 1e. Mirrors quint/galaxy.qnt.
+ *
+ * Per-star numeric `size` (in [STAR_SIZE_MIN, STAR_SIZE_MAX]) drives
+ * the rendered body radius and bloom width, and will later govern
+ * resource yield of a colonised star. The colour is one of six
+ * preset hues (white/yellow/red/orange/green/purple).
+ *
+ * Pure module — no I/O, no rendering, no randomness outside
+ * `initGalaxy` which accepts a seeded PRNG.
  *
  * Invariants guaranteed by `initGalaxy`:
  *   - stars.length === STAR_COUNT_FOR_SIZE[size]
  *   - all star ids in 1..N are present exactly once
- *   - every star position lies within (or on the boundary of) a disc of
- *     radius `radius` centred at the origin
+ *   - every star position lies within (or on the boundary of) a disc
+ *     of radius `radius` centred at the origin
  *   - no two stars share the same (x, y) position
+ *   - every star.size in [STAR_SIZE_MIN, STAR_SIZE_MAX]
  *   - same seed + size always produces the same galaxy (determinism)
  *
- * Positions and radius are integers in abstract units (same as the Quint
- * spec). The renderer in src/ui/ will scale these to pixels. To preserve
- * Quint <-> TS parity at integer granularity, positions are stored as
- * integers; any sub-integer generation noise is rounded.
+ * Positions and radius are integers in abstract units (same as the
+ * Quint spec). The renderer in src/ui/ scales these to pixels. To
+ * preserve Quint <-> TS parity at integer granularity, positions are
+ * stored as integers; any sub-integer generation noise is rounded.
  */
 
-export const STAR_KINDS = [
-  'Blue',
+/**
+ * Star body colour palette. Mirror of `StarColor` in quint/galaxy.qnt.
+ * Six visually distinct hues. Not a physical spectral classification —
+ * Green and Purple aren't realistic in the Morgan-Keenan system but
+ * we want visual variety for gameplay.
+ */
+export const STAR_COLORS = [
   'White',
   'Yellow',
   'Red',
   'Orange',
-  'Brown',
+  'Green',
+  'Purple',
 ] as const;
 
-export type StarKind = (typeof STAR_KINDS)[number];
+export type StarColor = (typeof STAR_COLORS)[number];
 
-/**
- * Star physical size class. Drives both the rendered radius (in
- * pixels) and (eventually) the resource yield of a colonised star
- * system. Mapping from StarKind to StarSize is fixed by
- * `STAR_SIZE_FOR_KIND`; do not vary per-galaxy.
- */
-export const STAR_SIZES = ['Dwarf', 'Standard', 'Giant', 'Supergiant'] as const;
-export type StarSize = (typeof STAR_SIZES)[number];
-
-/**
- * sRGB hex body colour (format "0xRRGGBB") for a star of the given
- * kind. Mirror of STAR_COLOR in quint/galaxy.qnt.
- */
+/** sRGB hex body colour (format "0xRRGGBB") for a star of the given colour. */
 export type HexColor = string;
 
-export const STAR_COLOR_FOR_KIND: Record<StarKind, HexColor> = {
-  Blue: '0xb8d0ff',
+export const STAR_COLOR_FOR_COLOR: Record<StarColor, HexColor> = {
   White: '0xffffff',
   Yellow: '0xffe680',
   Orange: '0xffb060',
   Red: '0xff8080',
-  Brown: '0xc08050',
+  Green: '0xa0ffa0',
+  Purple: '0xc080ff',
 };
 
 /**
- * sRGB hex glow-halo colour (format "0xRRGGBB") for a star of the
- * given kind. Mirror of STAR_GLOW_COLOR in quint/galaxy.qnt.
+ * sRGB hex halo / bloom colour (format "0xRRGGBB") for a star of the
+ * given colour. Slightly more saturated than the body, so the halo
+ * reads as scatter rather than a shadow.
  */
-export const STAR_GLOW_COLOR_FOR_KIND: Record<StarKind, HexColor> = {
-  Blue: '0x6fa8ff',
+export const STAR_HALO_COLOR_FOR_COLOR: Record<StarColor, HexColor> = {
   White: '0xdde8ff',
   Yellow: '0xffd040',
   Orange: '0xff8030',
   Red: '0xff5050',
-  Brown: '0xa06030',
+  Green: '0x60ff60',
+  Purple: '0x8040ff',
 };
 
-/**
- * Physical size class for a star of the given kind. Mirror of
- * STAR_SIZE in quint/galaxy.qnt. Tuned in tandem with the renderer.
- */
-export const STAR_SIZE_FOR_KIND: Record<StarKind, StarSize> = {
-  Blue: 'Supergiant',
-  White: 'Giant',
-  Yellow: 'Standard',
-  Orange: 'Standard',
-  Red: 'Giant',
-  Brown: 'Dwarf',
-};
+/** Inclusive minimum star size. Mirror of STAR_SIZE_MIN. */
+export const STAR_SIZE_MIN = 1;
+
+/** Inclusive maximum star size. Mirror of STAR_SIZE_MAX. */
+export const STAR_SIZE_MAX = 100;
+
+/** True iff `sz` lies in [STAR_SIZE_MIN, STAR_SIZE_MAX]. */
+export function isValidSize(sz: number): boolean {
+  return Number.isInteger(sz) && sz >= STAR_SIZE_MIN && sz <= STAR_SIZE_MAX;
+}
 
 /**
- * Pixel radius of a star body for a given StarSize. Mirror of
- * STAR_RADIUS_PX in quint/galaxy.qnt. Tuned for 100% zoom; the
- * renderer is expected to leave body size fixed (no zoom-scaling)
- * so stars stay visible at any zoom level.
+ * Pixel radius of a star body for a star of numeric size `s`.
+ * Linear interpolation: size=1 → 1 px, size=100 → 5 px.
+ * Mirror of STAR_BODY_PX in quint/galaxy.qnt.
  */
-export const STAR_RADIUS_PX_FOR_SIZE: Record<StarSize, number> = {
-  Dwarf: 2,
-  Standard: 3,
-  Giant: 4,
-  Supergiant: 5,
-};
+export function starBodyPx(s: number): number {
+  if (!isValidSize(s)) return 0;
+  // 1 + (s - 1) * 4 / 99 → integer math mirroring the Quint formula.
+  return 1 + Math.trunc(((s - 1) * 4) / 99);
+}
 
 /**
- * Gaussian-blur strength (in pixels) applied to the glow halo of a
- * star of the given size. Mirror of STAR_BLUR_PX in quint/galaxy.qnt.
- * Larger stars get a wider, softer bloom; dwarfs get a tight, subtle
- * glow. The blur is applied only to the halo layer — the body and
- * diffraction spikes stay sharp so the star reads as a point of
- * light surrounded by scatter.
+ * Pixel radius of the star's inner bloom. About 1.7x the body with
+ * a floor of 2 so even tiny stars get a visible bloom.
+ * Mirror of STAR_BLOOM_PX.
  */
-export const STAR_BLUR_PX_FOR_SIZE: Record<StarSize, number> = {
-  Dwarf: 2,
-  Standard: 4,
-  Giant: 7,
-  Supergiant: 10,
-};
-
-/** Glow halo radius as a multiple of the body radius. */
-export const STAR_GLOW_RATIO = 3;
+export function starBloomPx(s: number): number {
+  const b = starBodyPx(s);
+  if (b === 0) return 0;
+  const r = Math.trunc((b * 17) / 10);
+  return r < 2 ? 2 : r;
+}
 
 /**
- * Glow halo alpha (0..255). ~0.43. Bumped from the original 0.25 so
- * the gaussian-blurred bloom reads clearly against the dark blue
- * galaxy disc.
+ * Pixel radius of the star's outer halo. About 3x the body, with a
+ * floor of 3. Mirror of STAR_HALO_PX.
  */
-export const STAR_GLOW_ALPHA = 110;
+export function starHaloPx(s: number): number {
+  const b = starBodyPx(s);
+  if (b === 0) return 0;
+  const r = b * 3;
+  return r < 3 ? 3 : r;
+}
 
-/** Body alpha (0..255). */
-export const STAR_BODY_ALPHA = 255;
+/**
+ * Gaussian-blur strength (pixels) applied to the inner bloom.
+ * Mirror of STAR_BLOOM_BLUR_PX. Range 1..5.
+ */
+export function starBloomBlurPx(s: number): number {
+  if (!isValidSize(s)) return 0;
+  return 1 + Math.trunc(((s - 1) * 4) / 99);
+}
+
+/**
+ * Gaussian-blur strength (pixels) applied to the outer halo.
+ * **Heavy** blur layer in the new rendering.
+ * Mirror of STAR_HALO_BLUR_PX. Range 2..12.
+ */
+export function starHaloBlurPx(s: number): number {
+  if (!isValidSize(s)) return 0;
+  return 2 + Math.trunc(((s - 1) * 10) / 99);
+}
+
+/**
+ * Gaussian-blur strength (pixels) applied to the central white core.
+ * **Lesser** blur layer. Range 0..3.
+ * Mirror of STAR_CORE_BLUR_PX.
+ */
+export function starCoreBlurPx(s: number): number {
+  if (!isValidSize(s)) return 0;
+  return Math.trunc(((s - 1) * 3) / 99);
+}
+
+/** Inner-bloom alpha (0..255). ~0.43. */
+export const STAR_BLOOM_ALPHA = 110;
+
+/** Outer-halo alpha (0..255). ~0.24. */
+export const STAR_HALO_ALPHA = 60;
+
+/** White-core alpha (0..255). Opaque. */
+export const STAR_CORE_ALPHA = 255;
 
 export const GALAXY_SIZES = ['Small', 'Medium', 'Large', 'Huge'] as const;
 export type GalaxySize = (typeof GALAXY_SIZES)[number];
 
 /**
  * Authoritative star counts per galaxy size.
- * Source: Master of Orion (1993). Mirror of STAR_COUNT in quint/galaxy.qnt.
+ * Source: Master of Orion (1993). Mirror of STAR_COUNT in
+ * quint/galaxy.qnt.
  */
 export const STAR_COUNT_FOR_SIZE: Record<GalaxySize, number> = {
   Small: 24,
@@ -142,7 +174,8 @@ export interface Position {
 
 export interface Star {
   readonly id: number;
-  readonly kind: StarKind;
+  readonly color: StarColor;
+  readonly size: number;
   readonly position: Position;
 }
 
@@ -218,9 +251,15 @@ function minStarDistance(n: number, radius: number): number {
  * Stars are placed using rejection sampling inside a bounded disc with a
  * minimum distance between any two stars (Poisson-disk style).
  *
- * The function is total: if the minimum distance is too tight to fit the
- * target star count, the minimum is relaxed progressively until the disc
- * can hold the required number.
+ * Each star gets:
+ *   - a colour drawn uniformly from STAR_COLORS (round-robin in
+ *     practice, since we index by `stars.length`)
+ *   - a numeric size drawn uniformly from [STAR_SIZE_MIN, STAR_SIZE_MAX]
+ *     (uniform for now — gameplay-balancing will tune later)
+ *
+ * The function is total: if the minimum distance is too tight to fit
+ * the target star count, the minimum is relaxed progressively until
+ * the disc can hold the required number.
  *
  * Determinism: identical (seed, size) always produces an identical galaxy.
  */
@@ -261,9 +300,15 @@ export function initGalaxy(seed: number, size: GalaxySize): Galaxy {
     }
     if (!ok) continue;
 
+    // Uniform numeric size in [STAR_SIZE_MIN, STAR_SIZE_MAX].
+    const sizeRaw =
+      STAR_SIZE_MIN +
+      Math.floor(rng() * (STAR_SIZE_MAX - STAR_SIZE_MIN + 1));
+
     stars.push({
       id: stars.length + 1,
-      kind: STAR_KINDS[stars.length % STAR_KINDS.length]!,
+      color: STAR_COLORS[stars.length % STAR_COLORS.length]!,
+      size: sizeRaw,
       position: candidate,
     });
   }
@@ -297,6 +342,8 @@ export function isValidGalaxy(g: Galaxy): boolean {
     if (s.position.x * s.position.x + s.position.y * s.position.y > r * r) {
       return false;
     }
+
+    if (!isValidSize(s.size)) return false;
   }
   return true;
 }

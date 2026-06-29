@@ -67,12 +67,13 @@ module starmap {
   /// Mirror of galaxy.qnt's Position. Integer 2D coords in galaxy units.
   type Position = { x: int, y: int }
 
-  /// Mirror of galaxy.qnt's Star — only id and position matter to the
-  /// camera math. `kind` is kept for completeness; the renderer reads
-  /// it for star colour but the spec never branches on it.
-  type Star = { id: int, kind: StarKind, position: Position }
+  /// Mirror of galaxy.qnt's Star — only id, color, size and position
+  /// are read directly here. `color` and `size` are kept for
+  /// completeness; the renderer reads them but the spec never branches
+  /// on them.
+  type Star = { id: int, color: StarColor, size: int, position: Position }
 
-  type StarKind = Blue | White | Yellow | Red | Orange | Brown
+  type StarColor = White | Yellow | Red | Orange | Green | Purple
 
   /// Subset of galaxy.qnt's Galaxy. Only `stars` and `radius` are
   /// used by the camera. We accept any star set here so this module

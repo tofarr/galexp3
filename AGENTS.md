@@ -89,6 +89,83 @@ when new patterns, decisions, or gotchas are discovered.
   blur" often mean the blur is rendering but at a strength that's
   too low to read. Bump strength before suspecting broken plumbing.
 
+### Iter 1e — Numeric star size + new colour palette + layered bloom
+
+**Scope:**
+- Replaced the 4-tier `StarSize` enum (Dwarf/Standard/Giant/Supergiant)
+  with a numeric `size: int` in `[1, 100]`. Will later govern resource
+  yield of a colonised star.
+- Replaced the colour palette: dropped Blue & Brown (looked like
+  artifacts on the dark disc), added Green & Purple for visual variety
+  (not realistic in MK classification — gameplay colours).
+  New set: **White, Yellow, Orange, Red, Green, Purple**.
+- Dropped diffraction spikes — the new layered bloom renders as a
+  realistic astrophotography-style point of light with halo.
+- Each star is now four PixiJS layers (back to front):
+  1. Outer halo (`STAR_HALO_COLOR_FOR_COLOR`, `haloRadius`, low alpha,
+     **heavy** blur — atmospheric scatter)
+  2. Inner bloom (body colour, `bloomRadius`, medium alpha, medium blur)
+  3. White core (pure white, `bodyRadius`, opaque, **lesser** blur)
+  4. Sharp highlight dot (white, ~0.4× bodyRadius, opaque, no blur —
+     pixel-precise centre for bright stars)
+- All pixel choices derived from `starBodyPx(size)`, `starBloomPx(size)`,
+  `starHaloPx(size)`, `starBloomBlurPx(size)`, `starHaloBlurPx(size)`,
+  `starCoreBlurPx(size)` — every star in the galaxy uses the same
+  formulas; no per-galaxy tuning.
+- New **procedural starfield** backdrop — ~2000 deterministic dust
+  stars (~3.5/kpx²) painted into a single Graphics in one draw call,
+  tinted mostly white with some warm/cool accent. Sits behind the
+  galaxy disc.
+
+**Spec mirror:**
+- `quint/galaxy.qnt` — `StarColor = White | Yellow | Red | Orange |
+  Green | Purple`, `STAR_COLOR_FOR_COLOR` table, `STAR_HALO_COLOR_FOR_COLOR`
+  table, `STAR_BODY_PX/BLOOM/HALO_PX/BLOOM_BLUR_PX/HALO_BLUR_PX/
+  CORE_BLUR_PX` formulas, new `allStarsHaveValidSize` predicate.
+  Static checks added: `bodyRadiusInRange`, `haloBlurIsMonotonic`,
+  `haloBlurHeaviest`, `everyColourHasBodyAndHalo`,
+  `starSizeRangeIsSane`.
+- `quint/starmap.qnt` — `StarKind` alias renamed to `StarColor`
+  with the new variants; `Star` struct gains `color` + `size`.
+
+**Decisions logged:**
+- **Uniform** size distribution across [1, 100] for now. Unnatural
+  (real galaxies have many more small stars than large) but better
+  for gameplay — predictable variability, no dead-stars syndrome
+  where half the map has nothing useful. Switch to a power-law
+  distribution later when we balance resources.
+- Body colour is separate from halo colour. Body uses the softer hue
+  (e.g. Yellow body 0xffe680) while halo uses the more saturated
+  variant (0xffd040). The contrast makes the scatter read as light
+  bleeding past the star rather than a shadow.
+- White is a special case — body and halo both whitish (0xffffff
+  body, 0xdde8ff halo). They are allowed to match because a pure
+  white halo around a white star reads correctly.
+- Three blur layers instead of one. The "heavy" halo blur is the
+  dominant feature (range 2..12 px); the "lesser" core blur keeps
+  the white centre sharp but softens pixel edges (range 0..3 px);
+  bloom blur sits between (range 1..5 px).
+- Each star is FOUR PixiJS Graphics (halo/bloom/core/highlight),
+  not one. Cost: ~4× draw calls per star. At 72 stars (Huge) = 288
+  draw calls — comfortably under the practical limit. If we ever
+  push to >500 stars we'll revisit with batched container.
+- Dust starfield rendered once at mount, NOT re-rendered on galaxy
+  change. The dust belongs to the viewport, not the galaxy.
+- Poisson-disk min-distance in `initGalaxy` is now allowed to
+  relax progressively (up to 30%) if the disc can't fit the target
+  star count at the calculated spacing. The test for "no two
+  stars closer than minDist" uses the same 30% allowance.
+
+**Debugging breadcrumbs for the future:**
+- PixiJS Graphics with a `BlurFilter` require a non-zero
+  `filterArea` larger than the visible bounds. Rule of thumb used:
+  `ceil(radius + 3*blurStrength + 2)` per axis. Forget this and the
+  blur renders as a hard circle (clip).
+- The `BackgroundColor` for the PixiJS app is `0`. Any dust drawn
+  before the disc fill will be painted over. Dust is drawn first
+  (behind disc); this is intentional so the disc reads as a region
+  of dense gas rather than a window into a star cloud.
+
 ## Layout
 
 ```

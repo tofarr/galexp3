@@ -1,28 +1,28 @@
 /**
  * PixiJS renderer for the galaxy star map.
  *
- * Iteration 1d. Adds a Gaussian-blurred bloom layer on each
- * star: the halo (atmospheric scatter) is rendered into a
- * per-star Container wrapped in a BlurFilter, while the body
- * and diffraction spikes are kept sharp. Bloom strength scales
- * with star size so supergiants get the most dramatic scatter
- * and dwarfs stay tight.
+ * Iteration 1e — numeric star size, six-colour palette, layered bloom
+ * rendering with a procedural starfield backdrop.
  *
- * Reads pure camera + selection state from `src/sim/starmap.ts`
- * and paints it. All pixel layout decisions (world-to-screen
- * transform, viewport centring, aspect handling) come from the
- * sim layer — this module is a dumb projection of state into
- * shapes.
+ * Per-star layering (back to front, all under the selection ring):
+ *   1. Outer halo (star's halo colour, ~3× body radius, low alpha,
+ *      heavy Gaussian blur — atmospheric scatter)
+ *   2. Inner bloom (star's body colour, ~1.7× body radius, medium
+ *      alpha, medium Gaussian blur — colour glow)
+ *   3. White core (pure white, body radius, opaque, lesser Gaussian
+ *      blur — bright point of light)
+ *   4. Tiny sharp center dot (pure white, ~0.4× body radius, opaque,
+ *      unblurred — pixel-precise highlight for the brightest stars)
  *
- * Three layers (back to front):
- *   - disc background  (filled circle)
- *   - stars            (one small circle per galaxy star)
- *   - selection ring   (highlight around the selected star, if any)
+ * Background:
+ *   - Procedural starfield drawn first across the entire viewport.
+ *     ~2000 deterministic dust stars at low alpha, ~80% white with
+ *     the remaining 20% tinted warm/cool. Sits behind the galaxy disc.
  *
- * The renderer re-uses a single PixiJS Application + Graphics for
- * all three layers and rebuilds the star shapes only when the star
- * set changes. Camera updates (pan, zoom) just repaint with the new
- * camera. Selection changes just toggle the ring.
+ * Reads pure camera + selection state from `src/sim/starmap.ts` and
+ * paints it. All pixel layout decisions (world-to-screen transform,
+ * viewport centring, aspect handling) come from the sim layer — this
+ * module is a dumb projection of state into shapes.
  */
 
 import { Application, BlurFilter, Container, Graphics, Rectangle } from 'pixi.js';
@@ -38,14 +38,18 @@ import {
   type Viewport,
 } from '../sim/starmap';
 import {
-  STAR_BLUR_PX_FOR_SIZE,
-  STAR_BODY_ALPHA,
-  STAR_COLOR_FOR_KIND,
-  STAR_GLOW_ALPHA,
-  STAR_GLOW_COLOR_FOR_KIND,
-  STAR_GLOW_RATIO,
-  STAR_RADIUS_PX_FOR_SIZE,
-  STAR_SIZE_FOR_KIND,
+  STAR_BLOOM_ALPHA,
+  STAR_COLOR_FOR_COLOR,
+  STAR_CORE_ALPHA,
+  STAR_HALO_ALPHA,
+  STAR_HALO_COLOR_FOR_COLOR,
+  starBloomBlurPx,
+  starBloomPx,
+  starBodyPx,
+  starCoreBlurPx,
+  starHaloBlurPx,
+  starHaloPx,
+  type StarColor,
 } from '../sim/galaxy';
 
 // ---------------------------------------------------------------------------
@@ -58,7 +62,7 @@ const COLOR_SELECTION_RING = 0xffd07b;
 const COLOR_STAR_SELECTED = 0xffd07b;
 
 /**
- * Parse a "0xRRGGBB" hex string (the format used by STAR_COLOR_FOR_KIND
+ * Parse a "0xRRGGBB" hex string (the format used by STAR_COLOR_FOR_COLOR
  * and friends) into a 24-bit integer suitable for PixiJS colour APIs.
  * Returns 0 on malformed input — the appearance table is enforced by
  * unit tests, so a 0 only happens if the spec/TS tables are tampered
@@ -66,6 +70,86 @@ const COLOR_STAR_SELECTED = 0xffd07b;
  */
 function parseHexColor(hex: string): number {
   return parseInt(hex, 16) | 0;
+}
+
+// ---------------------------------------------------------------------------
+// Procedural starfield
+// ---------------------------------------------------------------------------
+
+/**
+ * Starfield dust parameters. Picked for a "dusty deep-space" feel —
+ * many faint points with a handful of brighter highlights, slightly
+ * warmer than pure white. The count is per-viewport-pixel-scaled so
+ * density doesn't change with window size.
+ */
+const DUST_STARS_PER_KPX = 3.5; // ~2200 at 800x800, ~1900 at 700x600
+const DUST_DENSITY_SEED = 0x57a3d51; // deterministic scatter across reloads
+
+interface DustStar {
+  readonly x: number;
+  readonly y: number;
+  readonly radius: number;
+  readonly color: number;
+  readonly alpha: number;
+}
+
+/**
+ * Generate a deterministic list of dust-star positions, sizes, and
+ * colours for the given viewport. Uses a seeded PRNG so the same
+ * viewport always renders the same backdrop.
+ */
+function generateDustStars(viewport: Viewport): DustStar[] {
+  const rng = mulberry32(DUST_DENSITY_SEED);
+  const areaPx = viewport.width * viewport.height;
+  const count = Math.max(400, Math.round((areaPx / 1000) * DUST_STARS_PER_KPX));
+  const stars: DustStar[] = [];
+  for (let i = 0; i < count; i++) {
+    const x = rng() * viewport.width;
+    const y = rng() * viewport.height;
+    // Mostly tiny (0.5 px), with a long tail of slightly bigger ones.
+    const rRoll = rng();
+    const radius = rRoll < 0.85 ? 0.6 : rRoll < 0.97 ? 1.0 : 1.5;
+    // Alpha skewed low so most dust is barely visible.
+    const alphaRoll = rng();
+    const alpha = alphaRoll < 0.7 ? 0.18 : alphaRoll < 0.95 ? 0.32 : 0.55;
+    // Colour: 80% white-ish, 10% warm, 10% cool.
+    const cRoll = rng();
+    let color: number;
+    if (cRoll < 0.8) color = 0xeeeeff;
+    else if (cRoll < 0.9) color = 0xffd9a8;
+    else color = 0xb0c8ff;
+    stars.push({ x, y, radius, color, alpha });
+  }
+  return stars;
+}
+
+/**
+ * Paint the procedural starfield onto a single Graphics. Batched into
+ * one draw call rather than 2000 PixiJS objects for performance.
+ * Tiny circles drawn with low alpha blend to give the dusty-stars look.
+ */
+function paintDust(target: Graphics, dust: DustStar[], _viewport: Viewport): void {
+  target.clear();
+  for (const d of dust) {
+    target.circle(d.x, d.y, d.radius).fill({
+      color: d.color,
+      alpha: d.alpha,
+    });
+  }
+}
+
+/**
+ * Deterministic seeded PRNG (Mulberry32). Same seed -> same sequence.
+ */
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -123,12 +207,23 @@ export async function mountStarmap(
   const root = new Container();
   app.stage.addChild(root);
 
+  // Layer order (back to front):
+  //   dust      procedural starfield background
+  //   disc      galaxy disc fill + outline
+  //   stars     per-star layered bloom
+  //   ring      selection highlight
+  const dustLayer = new Graphics();
   const disc = new Graphics();
   const starsLayer = new Container();
   const selectionLayer = new Graphics();
+  root.addChild(dustLayer);
   root.addChild(disc);
   root.addChild(starsLayer);
   root.addChild(selectionLayer);
+
+  // Pre-render the procedural starfield. It doesn't depend on galaxy
+  // or camera state, so we paint it once at mount and forget.
+  paintDust(dustLayer, generateDustStars(viewport), viewport);
 
   // Mutable renderer state.
   let currentGalaxy: GalaxySubset = { radius: 0, stars: [] };
@@ -179,71 +274,113 @@ export async function mountStarmap(
     for (const s of currentGalaxy.stars) {
       const p = projectStar(s, currentCamera, viewport, currentGalaxy.radius);
       const isSelected = s.id === currentSelectedId;
-      const sizeClass = STAR_SIZE_FOR_KIND[s.kind];
-      const bodyRadius = isSelected
-        ? STAR_RADIUS_PX_FOR_SIZE[sizeClass] + 2
-        : STAR_RADIUS_PX_FOR_SIZE[sizeClass];
-      const glowRadius = bodyRadius * STAR_GLOW_RATIO;
-      const bodyColor = isSelected
-        ? COLOR_STAR_SELECTED
-        : parseHexColor(STAR_COLOR_FOR_KIND[s.kind]);
-      const glowColor = isSelected
-        ? COLOR_STAR_SELECTED
-        : parseHexColor(STAR_GLOW_COLOR_FOR_KIND[s.kind]);
-      const blurStrength = STAR_BLUR_PX_FOR_SIZE[sizeClass];
-
-      // Halo: a single Graphics holding two stacked glow circles,
-      // run through a BlurFilter. The soft scatter around the bright
-      // body gives the impression of atmospheric bloom; the body and
-      // spikes below stay sharp.
-      const halo = new Graphics();
-      halo.circle(0, 0, glowRadius).fill({
-        color: glowColor,
-        alpha: STAR_GLOW_ALPHA / 255,
-      });
-      halo.circle(0, 0, bodyRadius + Math.max(1, Math.floor(bodyRadius / 2)))
-        .fill({ color: glowColor, alpha: (STAR_GLOW_ALPHA * 2) / 255 });
-      // filterArea must contain the halo radius plus ~3x the blur
-      // kernel — otherwise PixiJS clips the blurred pixels.
-      const filterHalf = Math.ceil(glowRadius + blurStrength * 3 + 2);
-      halo.filterArea = new Rectangle(
-        -filterHalf,
-        -filterHalf,
-        filterHalf * 2,
-        filterHalf * 2,
-      );
-      halo.filters = [new BlurFilter({ strength: blurStrength })];
-      halo.x = p.sx;
-      halo.y = p.sy;
-      starsLayer.addChild(halo);
-
-      // Body: opaque disc + diffraction spikes (Giant/Supergiant only).
-      // Kept sharp — no filter — so the star reads as a point of
-      // light against the soft halo.
-      const body = new Graphics();
-      body.circle(0, 0, bodyRadius).fill({
-        color: bodyColor,
-        alpha: STAR_BODY_ALPHA / 255,
-      });
-      if (sizeClass === 'Giant' || sizeClass === 'Supergiant') {
-        const spikeLen = bodyRadius * 5;
-        const spikeWidth = sizeClass === 'Supergiant' ? 0.8 : 0.5;
-        const spikeAlpha = sizeClass === 'Supergiant' ? 0.6 : 0.45;
-        body.moveTo(-spikeLen, 0).lineTo(spikeLen, 0).stroke({
-          color: bodyColor,
-          width: spikeWidth,
-          alpha: spikeAlpha,
-        });
-        body.moveTo(0, -spikeLen).lineTo(0, spikeLen).stroke({
-          color: bodyColor,
-          width: spikeWidth,
-          alpha: spikeAlpha,
-        });
-      }
-      body.x = p.sx;
-      body.y = p.sy;
-      starsLayer.addChild(body);
+      paintStar(s.id, s.color, s.size, p.sx, p.sy, isSelected);
     }
+  }
+
+  /**
+   * Render a single star as a layered bloom at screen position
+   * (sx, sy). All pixel choices are derived from the numeric size;
+   * there is no per-galaxy tuning.
+   */
+  function paintStar(
+    _id: number,
+    color: StarColor,
+    size: number,
+    sx: number,
+    sy: number,
+    isSelected: boolean,
+  ): void {
+    const bodyRadius = Math.max(
+      1,
+      Math.round(starBodyPx(size) + (isSelected ? 2 : 0)),
+    );
+    const bloomRadius = starBloomPx(size);
+    const haloRadius = starHaloPx(size);
+    const haloBlur = starHaloBlurPx(size);
+    const bloomBlur = starBloomBlurPx(size);
+    const coreBlur = starCoreBlurPx(size);
+
+    const bodyColor = isSelected
+      ? COLOR_STAR_SELECTED
+      : parseHexColor(STAR_COLOR_FOR_COLOR[color]);
+    const haloColor = isSelected
+      ? COLOR_STAR_SELECTED
+      : parseHexColor(STAR_HALO_COLOR_FOR_COLOR[color]);
+
+    // ---- Layer 1: outer halo (heavy blur) ----------------------------
+    const halo = new Graphics();
+    halo.circle(0, 0, haloRadius).fill({
+      color: haloColor,
+      alpha: STAR_HALO_ALPHA / 255,
+    });
+    halo.circle(0, 0, haloRadius).stroke({
+      width: 0,
+      color: haloColor,
+      alpha: 0,
+    });
+    const haloHalf = Math.ceil(haloRadius + haloBlur * 3 + 2);
+    halo.filterArea = new Rectangle(
+      -haloHalf,
+      -haloHalf,
+      haloHalf * 2,
+      haloHalf * 2,
+    );
+    halo.filters = [new BlurFilter({ strength: haloBlur })];
+    halo.x = sx;
+    halo.y = sy;
+    starsLayer.addChild(halo);
+
+    // ---- Layer 2: inner bloom (medium blur) --------------------------
+    const bloom = new Graphics();
+    bloom.circle(0, 0, bloomRadius).fill({
+      color: bodyColor,
+      alpha: STAR_BLOOM_ALPHA / 255,
+    });
+    const bloomHalf = Math.ceil(bloomRadius + bloomBlur * 3 + 2);
+    bloom.filterArea = new Rectangle(
+      -bloomHalf,
+      -bloomHalf,
+      bloomHalf * 2,
+      bloomHalf * 2,
+    );
+    bloom.filters = [new BlurFilter({ strength: bloomBlur })];
+    bloom.x = sx;
+    bloom.y = sy;
+    starsLayer.addChild(bloom);
+
+    // ---- Layer 3: white core (lesser blur) ---------------------------
+    const core = new Graphics();
+    core.circle(0, 0, bodyRadius).fill({
+      color: 0xffffff,
+      alpha: STAR_CORE_ALPHA / 255,
+    });
+    if (coreBlur > 0) {
+      const coreHalf = Math.ceil(bodyRadius + coreBlur * 3 + 2);
+      core.filterArea = new Rectangle(
+        -coreHalf,
+        -coreHalf,
+        coreHalf * 2,
+        coreHalf * 2,
+      );
+      core.filters = [new BlurFilter({ strength: coreBlur })];
+    }
+    core.x = sx;
+    core.y = sy;
+    starsLayer.addChild(core);
+
+    // ---- Layer 4: sharp highlight dot --------------------------------
+    // Tiny unblurred point at the very centre so even the brightest
+    // stars have a pixel-precise highlight against the soft core.
+    const highlightRadius = Math.max(0.5, bodyRadius * 0.4);
+    const highlight = new Graphics();
+    highlight.circle(0, 0, highlightRadius).fill({
+      color: 0xffffff,
+      alpha: 1,
+    });
+    highlight.x = sx;
+    highlight.y = sy;
+    starsLayer.addChild(highlight);
   }
 
   function paintSelectionRing(): void {
@@ -332,3 +469,47 @@ export async function mountStarmap(
 
 /** Re-export starName so the UI layer can label the selection. */
 export { starName };
+
+/**
+ * Test seam — paint one star into a fresh Graphics so unit tests
+ * can assert on the layer set without standing up the full renderer.
+ */
+export function _paintStarForTest(opts: {
+  graphics: Graphics;
+  color: StarColor;
+  size: number;
+  isSelected?: boolean;
+}): void {
+  const { graphics, color, size } = opts;
+  const isSelected = opts.isSelected ?? false;
+
+  const bodyRadius = Math.max(1, Math.round(starBodyPx(size) + (isSelected ? 2 : 0)));
+  const bloomRadius = starBloomPx(size);
+  const haloRadius = starHaloPx(size);
+
+  const bodyColor = isSelected
+    ? COLOR_STAR_SELECTED
+    : parseHexColor(STAR_COLOR_FOR_COLOR[color]);
+  const haloColor = isSelected
+    ? COLOR_STAR_SELECTED
+    : parseHexColor(STAR_HALO_COLOR_FOR_COLOR[color]);
+
+  // Halo (blurred).
+  graphics.circle(0, 0, haloRadius).fill({
+    color: haloColor,
+    alpha: STAR_HALO_ALPHA / 255,
+  });
+  // Inner bloom (blurred).
+  graphics.circle(0, 0, bloomRadius).fill({
+    color: bodyColor,
+    alpha: STAR_BLOOM_ALPHA / 255,
+  });
+  // White core.
+  graphics.circle(0, 0, bodyRadius).fill({
+    color: 0xffffff,
+    alpha: STAR_CORE_ALPHA / 255,
+  });
+}
+
+// Internal constants re-exported for tests / future use.
+export { STAR_BLOOM_ALPHA, STAR_HALO_ALPHA, STAR_CORE_ALPHA };

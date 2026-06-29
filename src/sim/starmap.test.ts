@@ -209,7 +209,7 @@ describe('starmap — projectStar / unprojectPoint round trip', () => {
     const v: Viewport = { width: 800, height: 600 };
     const radius = 70;
     const c: Camera = { pan: { x: 0, y: 0 }, zoom: 100 };
-    const origin: Star = { id: 1, kind: 'Yellow', position: { x: 0, y: 0 } };
+    const origin: Star = { id: 1, color: 'Yellow', size: 50, position: { x: 0, y: 0 } };
     const proj = projectStar(origin, c, v, radius);
     expect(proj.sx).toBe(400);
     expect(proj.sy).toBe(300);
@@ -643,7 +643,7 @@ describe('starmap — zoomCameraAround', () => {
           const w0 = unprojectPoint(anchor, s0.camera, v, g.radius);
           // After zooming, that same world point projects back onto the anchor.
           const back = projectStar(
-            { id: 0, kind: 'Yellow', position: w0 },
+            { id: 0, color: 'Yellow', size: 50, position: w0 },
             s1.camera,
             v,
             g.radius,
@@ -712,7 +712,7 @@ describe('starmap — Quint <-> TS parity', () => {
   it('projectStar matches the spec for fixed inputs', () => {
     const s: Star = {
       id: 1,
-      kind: 'Yellow',
+      color: 'Yellow', size: 50,
       position: { x: 10, y: 0 },
     };
     const c: Camera = { pan: { x: 0, y: 0 }, zoom: 100 };

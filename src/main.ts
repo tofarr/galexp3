@@ -1,8 +1,12 @@
 /**
  * Application entry point.
  *
- * Iter 1d — added Gaussian-blur bloom on star halos (kept galaxy
- * data model from 1a, starmap from 1b, star appearance from 1c).
+ * Iter 1e — replaced fixed StarSize enum with numeric size in
+ * [1, 100] (will later drive resource yield), swapped colour
+ * palette to {White, Yellow, Red, Orange, Green, Purple}, rebuilt
+ * star rendering as four layers (outer halo → inner bloom → white
+ * core → sharp highlight), and added a procedural dusty starfield
+ * backdrop.
  *
  * View routing (in-file state machine):
  *
@@ -307,7 +311,7 @@ function showView(view: AppView): void {
     menuView.classList.add('hidden');
     gameView.classList.remove('hidden');
     backLink.classList.remove('hidden');
-    headerSubtitle.textContent = 'Iteration 1d — gaussian-blurred star halos';
+    headerSubtitle.textContent = 'Iteration 1e — sized + coloured stars with layered bloom';
   }
 }
 

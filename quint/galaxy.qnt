@@ -2,11 +2,13 @@
 //
 // galaxy.qnt
 //
-// Iteration 1a — Galaxy data model spec.
+// Iteration 1e — Galaxy data model + per-star appearance.
 //
-// Scope (deliberately minimal):
-//   - Star, Position, StarKind, GalaxySize, Galaxy types
+// Scope (current):
+//   - Position, StarColor, GalaxySize, Galaxy types
 //   - Per-size star counts and disc radii
+//   - Per-star numeric size in [STAR_SIZE_MIN, STAR_SIZE_MAX]
+//     — will later govern resource yield of a colonised star.
 //   - Validity predicate isValidGalaxy(g)
 //   - Static sanity checks (Quint `run` checks)
 //
@@ -39,38 +41,25 @@ module galaxy {
   // Types
   // ---------------------------------------------------------------------------
 
-  /// Star spectral kind. Mirrors the MoO 1 / 2 colour palette.
-  /// Real spectral classes are richer; for v1 we keep it minimal and
-  /// visually distinct. Extend later as gameplay needs dictate.
-  type StarKind =
-    | Blue
+  /// Star body colour palette. Six visually distinct hues picked to
+  /// read against the dark blue disc background. Not a physical
+  /// spectral classification — "Green" and "Purple" stars are not
+  /// realistic in the Morgan-Keenan system, but we want visual
+  /// variety for gameplay (coloured empires, alien races, etc.).
+  type StarColor =
     | White
     | Yellow
     | Red
     | Orange
-    | Brown
+    | Green
+    | Purple
 
-  /// Star physical size class. Drives both the rendered radius (in
-  /// pixels) and (eventually) the resource yield of a colonised star
-  /// system. Mapping from StarKind to StarSize is fixed by
-  /// `STAR_SIZE`; do not vary per-galaxy.
-  type StarSize =
-    | Dwarf
-    | Standard
-    | Giant
-    | Supergiant
-
-  /// sRGB hex colour for the body of a star of the given kind.
+  /// sRGB hex colour for the body of a star of the given colour.
   /// Format: "0xRRGGBB" (lowercase hex). Used by the renderer to
   /// fill the star body.
   /// (No colour-management discussion in the spec; the renderer is
   /// expected to pass these through verbatim to its colour API.)
   type HexColor = str
-
-  /// sRGB hex colour for the glow halo around a star of the given kind.
-  /// Same format as STAR_COLOR but with a hue chosen to read as a soft
-  /// glow against the dark disc background.
-  type HexGlowColor = str
 
   /// A star's position in the galaxy. Continuous 2D space.
   /// Units are abstract integers (rendering will scale them to pixels).
@@ -82,9 +71,13 @@ module galaxy {
 
   /// A single star system. v1 keeps the system itself abstract —
   /// no planets, no buildings, no colony state yet.
+  /// `size` is a positive integer in [STAR_SIZE_MIN, STAR_SIZE_MAX].
+  /// Larger stars render with bigger bodies, wider blooms, and (later)
+  /// produce more resources when colonised.
   type Star = {
     id: StarId,
-    kind: StarKind,
+    color: StarColor,
+    size: int,
     position: Position
   }
 
@@ -130,85 +123,126 @@ module galaxy {
     else 90
 
   // ---------------------------------------------------------------------------
+  // Star numeric size range
+  // ---------------------------------------------------------------------------
+
+  /// Inclusive minimum star size. Below this the star is essentially
+  /// invisible and not worth colonising; the invariant rejects it.
+  pure val STAR_SIZE_MIN: int = 1
+
+  /// Inclusive maximum star size. Above this the bloom becomes
+  /// unmanageably wide at extreme zoom-out; tune as needed.
+  pure val STAR_SIZE_MAX: int = 100
+
+  /// True iff a star's numeric size is within the allowed range.
+  pure def isValidSize(sz: int): bool =
+    sz >= STAR_SIZE_MIN and sz <= STAR_SIZE_MAX
+
+  // ---------------------------------------------------------------------------
   // Star appearance tables
   // ---------------------------------------------------------------------------
   //
-  // These tables bind a StarKind to its physical size class, body
-  // colour, and glow colour. The mapping is fixed — every star in every
-  // galaxy uses the same table. Gameplay relevance: StarSize will drive
+  // These tables bind a StarColor to its body and halo colour, and
+  // give pixel-scale formulas driven by the star's numeric size.
+  // The mapping is fixed — every star in every galaxy uses the
+  // same formulas. Gameplay relevance: `size` will later drive
   // resource yield of a colonised star (defined in a later iteration).
 
-  /// Physical size class for a star of the given kind.
-  /// Mapping is loosely based on real stellar classification, simplified
-  /// for v1 gameplay. The exact mapping is a tuning knob; if you change
-  /// it, also change it in src/sim/galaxy.ts#STAR_SIZE_FOR_KIND.
-  pure def STAR_SIZE(k: StarKind): StarSize =
-    if (k == Blue)    Supergiant
-    else if (k == White)   Giant
-    else if (k == Yellow)  Standard
-    else if (k == Orange)  Standard
-    else if (k == Red)     Giant
-    else Dwarf  // Brown
-
   /// sRGB hex body colour (format "0xRRGGBB") for a star of the given
-  /// kind. Colours are picked to be visually distinct against the
+  /// colour. Colours are picked to be visually distinct against the
   /// #1a2545 disc background while still reading as a star.
-  pure def STAR_COLOR(k: StarKind): HexColor =
-    if (k == Blue)    "0xb8d0ff"
-    else if (k == White)   "0xffffff"
-    else if (k == Yellow)  "0xffe680"
-    else if (k == Orange)  "0xffb060"
-    else if (k == Red)     "0xff8080"
-    else "0xc08050"  // Brown
+  pure def STAR_COLOR(c: StarColor): HexColor =
+    if (c == White)   "0xffffff"
+    else if (c == Yellow)  "0xffe680"
+    else if (c == Orange)  "0xffb060"
+    else if (c == Red)     "0xff8080"
+    else if (c == Green)   "0xa0ffa0"
+    else "0xc080ff"  // Purple
 
-  /// sRGB hex glow-halo colour (format "0xRRGGBB") for a star of the
-  /// given kind. Slightly more saturated than the body, with hue
+  /// sRGB hex halo / bloom colour (format "0xRRGGBB") for a star of the
+  /// given colour. Slightly more saturated than the body, with hue
   /// pushed toward the warm side where the body is cool and vice
-  /// versa, so the halo reads as a bloom rather than a shadow.
-  pure def STAR_GLOW_COLOR(k: StarKind): HexGlowColor =
-    if (k == Blue)    "0x6fa8ff"
-    else if (k == White)   "0xdde8ff"
-    else if (k == Yellow)  "0xffd040"
-    else if (k == Orange)  "0xff8030"
-    else if (k == Red)     "0xff5050"
-    else "0xa06030"  // Brown
+  /// versa, so the bloom reads as scatter rather than a shadow.
+  pure def STAR_HALO_COLOR(c: StarColor): HexColor =
+    if (c == White)   "0xdde8ff"
+    else if (c == Yellow)  "0xffd040"
+    else if (c == Orange)  "0xff8030"
+    else if (c == Red)     "0xff5050"
+    else if (c == Green)   "0x60ff60"
+    else "0x8040ff"  // Purple
 
-  /// Pixel radius of a star body for a given StarSize. Held in the
-  /// spec so the renderer is a dumb painter; the values are tuned
-  /// for a 100% zoom level. The renderer is expected to leave the
-  /// star body at a fixed pixel size (no zoom-scaling) so stars stay
-  /// visible at any zoom.
-  pure def STAR_RADIUS_PX(s: StarSize): int =
-    if (s == Dwarf)      2
-    else if (s == Standard)  3
-    else if (s == Giant)     4
-    else 5  // Supergiant
+  /// Pixel radius of a star body for a star of numeric size `s`.
+  /// Linear interpolation: size=1 → 1 px, size=100 → 5 px. The
+  /// renderer leaves body size fixed (no zoom-scaling) so stars
+  /// stay visible at any zoom.
+  pure def STAR_BODY_PX(s: int): int =
+    if (s < STAR_SIZE_MIN) 0
+    else if (s > STAR_SIZE_MAX) 0
+    else
+      // 1 + (s - 1) * 4 / 99 → 1..5 across the full range.
+      // Integer math: ((s - 1) * 4) / 99 truncated toward zero.
+      1 + ((s - 1) * 4 / 99)
 
-  /// Gaussian-blur strength (in pixels) applied to the glow halo of a
-  /// star of the given size. Larger stars get a wider, softer bloom;
-  /// dwarfs get a tight, subtle glow. The blur is applied only to the
-  /// halo layer — the body and diffraction spikes stay sharp so the
-  /// star reads as a point of light surrounded by scatter.
-  pure def STAR_BLUR_PX(s: StarSize): int =
-    if (s == Dwarf)        2
-    else if (s == Standard)  4
-    else if (s == Giant)     7
-    else 10   // Supergiant
+  /// Pixel radius of the star's inner bloom (the medium-soft scatter
+  /// around the body). About 1.7x the body, with a floor of 2 so
+  /// even tiny stars get a visible bloom.
+  pure def STAR_BLOOM_PX(s: int): int =
+    val b = STAR_BODY_PX(s)
+    if (b == 0) 0
+    else
+      val r = b * 17 / 10
+      if (r < 2) 2 else r
 
-  /// Glow halo radius as a multiple of the star body radius.
-  /// A single value for all sizes — keeps the visual language
-  /// consistent.
-  pure def STAR_GLOW_RATIO: int = 3
+  /// Pixel radius of the star's outer halo (the wide, very-soft
+  /// scatter). About 3x the body, gives the "atmospheric bloom" feel.
+  pure def STAR_HALO_PX(s: int): int =
+    val b = STAR_BODY_PX(s)
+    if (b == 0) 0
+    else
+      val r = b * 3
+      if (r < 3) 3 else r
 
-  /// Glow halo alpha (0..255) for the soft outer halo. A single
-  /// value for all sizes.
-  pure def STAR_GLOW_ALPHA: int = 110  // ~0.43 — bumped so the
-                                          // gaussian-blurred bloom
-                                          // reads against the dark
-                                          // background
+  /// Gaussian-blur strength (pixels) applied to the inner bloom.
+  /// Larger stars get a wider, softer inner bloom.
+  pure def STAR_BLOOM_BLUR_PX(s: int): int =
+    if (s < STAR_SIZE_MIN) 0
+    else if (s > STAR_SIZE_MAX) 0
+    else
+      // 1 + (s - 1) * 4 / 99 → 1..5 across the full range.
+      1 + ((s - 1) * 4 / 99)
 
-  /// Body alpha (0..255). Opaque bodies keep the visual punch.
-  pure def STAR_BODY_ALPHA: int = 255
+  /// Gaussian-blur strength (pixels) applied to the outer halo. This
+  /// is the **heavy** blur layer in the new rendering — it makes the
+  /// halo read as soft scatter rather than a hard ring.
+  pure def STAR_HALO_BLUR_PX(s: int): int =
+    if (s < STAR_SIZE_MIN) 0
+    else if (s > STAR_SIZE_MAX) 0
+    else
+      // 2 + (s - 1) * 10 / 99 → 2..12 across the full range.
+      2 + ((s - 1) * 10 / 99)
+
+  /// Gaussian-blur strength (pixels) applied to the central white
+  /// core. This is the **lesser** blur layer — it keeps the core
+  /// reading as a sharp point of light while still softening the
+  /// pixel edges so it merges naturally with the bloom.
+  pure def STAR_CORE_BLUR_PX(s: int): int =
+    if (s < STAR_SIZE_MIN) 0
+    else if (s > STAR_SIZE_MAX) 0
+    else
+      // (s - 1) * 3 / 99 → 0..3 across the full range.
+      (s - 1) * 3 / 99
+
+  /// Inner-bloom alpha (0..255). Modest opacity; the halo below is
+  /// the dominant glow layer.
+  pure val STAR_BLOOM_ALPHA: int = 110  // ~0.43
+
+  /// Outer-halo alpha (0..255). Lower than the inner bloom — the
+  /// halo is the soft, distant scatter.
+  pure val STAR_HALO_ALPHA: int = 60   // ~0.24
+
+  /// White-core alpha (0..255). Fully opaque so the core reads as
+  /// the brightest point.
+  pure val STAR_CORE_ALPHA: int = 255
 
   // ---------------------------------------------------------------------------
   // Predicates
@@ -237,6 +271,11 @@ module galaxy {
       )
     )
 
+  /// True iff every star in the galaxy has a numeric size in
+  /// [STAR_SIZE_MIN, STAR_SIZE_MAX].
+  pure def allStarsHaveValidSize(g: Galaxy): bool =
+    g.stars.forall(s => isValidSize(s.size))
+
   /// True iff the galaxy contains exactly the expected number of stars
   /// for its declared size.
   pure def starCountMatchesSize(g: Galaxy): bool =
@@ -254,6 +293,7 @@ module galaxy {
     and starIdsUnique(g)
     and allStarsWithinBounds(g)
     and noDuplicatePositions(g)
+    and allStarsHaveValidSize(g)
 
   /// Convenience: human-readable diagnostic name for a galaxy size.
   pure def galaxySizeName(s: GalaxySize): str =
@@ -286,36 +326,43 @@ module galaxy {
     and RADIUS(Large) > 0
     and RADIUS(Huge) > 0
 
-  /// Static assertion that every StarKind maps to a StarSize and that
-  /// the resulting StarRadius_px is in the expected 2..5 range.
-  run starRadiiAreInRange =
-    STAR_RADIUS_PX(STAR_SIZE(Blue))    > 1
-    and STAR_RADIUS_PX(STAR_SIZE(Blue))    < 10
-    and STAR_RADIUS_PX(STAR_SIZE(White))   > 1
-    and STAR_RADIUS_PX(STAR_SIZE(White))   < 10
-    and STAR_RADIUS_PX(STAR_SIZE(Yellow))  > 1
-    and STAR_RADIUS_PX(STAR_SIZE(Yellow))  < 10
-    and STAR_RADIUS_PX(STAR_SIZE(Orange))  > 1
-    and STAR_RADIUS_PX(STAR_SIZE(Orange))  < 10
-    and STAR_RADIUS_PX(STAR_SIZE(Red))     > 1
-    and STAR_RADIUS_PX(STAR_SIZE(Red))     < 10
-    and STAR_RADIUS_PX(STAR_SIZE(Brown))   > 1
-    and STAR_RADIUS_PX(STAR_SIZE(Brown))   < 10
+  /// Star size range is sane.
+  run starSizeRangeIsSane =
+    STAR_SIZE_MIN >= 1
+    and STAR_SIZE_MAX > STAR_SIZE_MIN
 
-  /// Static assertion that the size ordering is sane: a Supergiant is
-  /// strictly larger than a Giant, which is strictly larger than a
-  /// Standard, which is strictly larger than a Dwarf. This anchors the
-  /// gameplay promise that larger stars yield more resources.
-  run starSizeOrdering =
-    STAR_RADIUS_PX(Supergiant) > STAR_RADIUS_PX(Giant)
-    and STAR_RADIUS_PX(Giant)     > STAR_RADIUS_PX(Standard)
-    and STAR_RADIUS_PX(Standard)  > STAR_RADIUS_PX(Dwarf)
+  /// Spot-check that body radius lies in [1, 5] for a sweep of sizes.
+  /// Linear formula `1 + (s-1)*4/99` clamps correctly at both ends.
+  run bodyRadiusInRange =
+    STAR_BODY_PX(STAR_SIZE_MIN) >= 1
+    and STAR_BODY_PX(STAR_SIZE_MIN) <= 2
+    and STAR_BODY_PX(STAR_SIZE_MAX) >= 4
+    and STAR_BODY_PX(STAR_SIZE_MAX) <= 6
 
-  /// Static assertion that blur strength follows the same ordering as
-  /// size: bigger stars get a wider bloom. Anchors the visual contract
-  /// that Supergiants read as more luminous than Dwarfs.
-  run starBlurOrdering =
-    STAR_BLUR_PX(Supergiant) > STAR_BLUR_PX(Giant)
-    and STAR_BLUR_PX(Giant)     > STAR_BLUR_PX(Standard)
-    and STAR_BLUR_PX(Standard)  > STAR_BLUR_PX(Dwarf)
+  /// Halo blur is monotonically non-decreasing across the size range.
+  /// Spot-check at the endpoints and the midpoint.
+  run haloBlurIsMonotonic =
+    STAR_HALO_BLUR_PX(STAR_SIZE_MIN) <= STAR_HALO_BLUR_PX(50)
+    and STAR_HALO_BLUR_PX(50) <= STAR_HALO_BLUR_PX(STAR_SIZE_MAX)
+
+  /// Halo blur is the heaviest of the three blur layers — the outer
+  /// bloom is the dominant soft scatter.
+  run haloBlurHeaviest =
+    STAR_HALO_BLUR_PX(STAR_SIZE_MAX) > STAR_BLOOM_BLUR_PX(STAR_SIZE_MAX)
+    and STAR_BLOOM_BLUR_PX(STAR_SIZE_MAX) > STAR_CORE_BLUR_PX(STAR_SIZE_MAX)
+
+  /// Spot-check every colour has a non-empty body and halo.
+  run everyColourHasBodyAndHalo =
+    STAR_COLOR(White) != ""
+    and STAR_HALO_COLOR(White) != ""
+    and STAR_COLOR(Yellow) != ""
+    and STAR_HALO_COLOR(Yellow) != ""
+    and STAR_COLOR(Red) != ""
+    and STAR_HALO_COLOR(Red) != ""
+    and STAR_COLOR(Orange) != ""
+    and STAR_HALO_COLOR(Orange) != ""
+    and STAR_COLOR(Green) != ""
+    and STAR_HALO_COLOR(Green) != ""
+    and STAR_COLOR(Purple) != ""
+    and STAR_HALO_COLOR(Purple) != ""
 }

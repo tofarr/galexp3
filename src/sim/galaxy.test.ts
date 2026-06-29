@@ -11,25 +11,31 @@ import {
   GALAXY_SIZES,
   GalaxySize,
   RADIUS_FOR_SIZE,
-  STAR_BLUR_PX_FOR_SIZE,
-  STAR_BODY_ALPHA,
-  STAR_COLOR_FOR_KIND,
+  STAR_BLOOM_ALPHA,
+  STAR_COLORS,
+  STAR_COLOR_FOR_COLOR,
   STAR_COUNT_FOR_SIZE,
-  STAR_GLOW_ALPHA,
-  STAR_GLOW_COLOR_FOR_KIND,
-  STAR_GLOW_RATIO,
-  STAR_KINDS,
-  STAR_RADIUS_PX_FOR_SIZE,
-  STAR_SIZE_FOR_KIND,
-  STAR_SIZES,
-  StarKind,
-  StarSize,
+  STAR_CORE_ALPHA,
+  STAR_HALO_ALPHA,
+  STAR_HALO_COLOR_FOR_COLOR,
+  STAR_SIZE_MAX,
+  STAR_SIZE_MIN,
+  StarColor,
   initGalaxy,
   isValidGalaxy,
+  isValidSize,
+  starBloomBlurPx,
+  starBloomPx,
+  starBodyPx,
+  starCoreBlurPx,
+  starHaloBlurPx,
+  starHaloPx,
 } from './galaxy';
 
 const sizeArb: fc.Arbitrary<GalaxySize> = fc.constantFrom(...GALAXY_SIZES);
+const colorArb: fc.Arbitrary<StarColor> = fc.constantFrom(...STAR_COLORS);
 const seedArb = fc.integer({ min: -0x7fffffff, max: 0x7fffffff });
+const sizeValueArb = fc.integer({ min: STAR_SIZE_MIN, max: STAR_SIZE_MAX });
 
 describe('initGalaxy — star counts and ids', () => {
   it('matches the declared star count for each size', () => {
@@ -54,12 +60,23 @@ describe('initGalaxy — star counts and ids', () => {
     );
   });
 
-  it('uses only star kinds from the closed set', () => {
+  it('uses only colours from the closed set', () => {
     fc.assert(
       fc.property(sizeArb, seedArb, (size, seed) => {
         const g = initGalaxy(seed, size);
         for (const s of g.stars) {
-          expect(STAR_KINDS).toContain(s.kind);
+          expect(STAR_COLORS).toContain(s.color);
+        }
+      }),
+    );
+  });
+
+  it('assigns every star a numeric size in [STAR_SIZE_MIN, STAR_SIZE_MAX]', () => {
+    fc.assert(
+      fc.property(sizeArb, seedArb, (size, seed) => {
+        const g = initGalaxy(seed, size);
+        for (const s of g.stars) {
+          expect(isValidSize(s.size)).toBe(true);
         }
       }),
     );
@@ -143,7 +160,8 @@ describe('initGalaxy — determinism', () => {
           const sa = a.stars[i]!;
           const sb = b.stars[i]!;
           expect(sb.id).toBe(sa.id);
-          expect(sb.kind).toBe(sa.kind);
+          expect(sb.color).toBe(sa.color);
+          expect(sb.size).toBe(sa.size);
           expect(sb.position.x).toBe(sa.position.x);
           expect(sb.position.y).toBe(sa.position.y);
         }
@@ -210,7 +228,12 @@ describe('isValidGalaxy — top-level predicate', () => {
     const outside = {
       ...g,
       stars: [
-        { id: 999, kind: 'Blue' as StarKind, position: { x: r * 10, y: 0 } },
+        {
+          id: 999,
+          color: 'White' as StarColor,
+          size: 50,
+          position: { x: r * 10, y: 0 },
+        },
         ...g.stars.slice(1),
       ],
     };
@@ -223,82 +246,90 @@ describe('isValidGalaxy — top-level predicate', () => {
     const wrongRadius = { ...g, radius: RADIUS_FOR_SIZE[size] + 1 };
     expect(isValidGalaxy(wrongRadius)).toBe(false);
   });
+
+  it('rejects galaxies with a star whose size is out of range', () => {
+    const size: GalaxySize = 'Small';
+    const g = initGalaxy(4, size);
+    const badStar = g.stars[0]!;
+    const broken = {
+      ...g,
+      stars: [{ ...badStar, size: STAR_SIZE_MAX + 1 }, ...g.stars.slice(1)],
+    };
+    expect(isValidGalaxy(broken)).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
-// Star appearance tables (mirror of quint/galaxy.qnt STAR_SIZE / STAR_COLOR /
-// STAR_GLOW_COLOR / STAR_RADIUS_PX). These are pure lookup tables — we test
-// them exhaustively, no property tests needed.
+// Star appearance tables — these are pure functions, so we property-test
+// the formulas against the spec's claims about the ranges.
 // ---------------------------------------------------------------------------
 
-describe('star appearance tables', () => {
-  const kindArb: fc.Arbitrary<StarKind> = fc.constantFrom(...STAR_KINDS);
-  const sizeClassArb: fc.Arbitrary<StarSize> = fc.constantFrom(...STAR_SIZES);
-
-  it('every StarKind has a body colour, a glow colour, and a size', () => {
+describe('star appearance formulas', () => {
+  it('every StarColor has a body colour and a halo colour', () => {
     fc.assert(
-      fc.property(kindArb, (k) => {
-        expect(STAR_COLOR_FOR_KIND[k]).toMatch(/^0x[0-9a-f]{6}$/);
-        expect(STAR_GLOW_COLOR_FOR_KIND[k]).toMatch(/^0x[0-9a-f]{6}$/);
-        expect(STAR_SIZES).toContain(STAR_SIZE_FOR_KIND[k]);
+      fc.property(colorArb, (c) => {
+        expect(STAR_COLOR_FOR_COLOR[c]).toMatch(/^0x[0-9a-f]{6}$/);
+        expect(STAR_HALO_COLOR_FOR_COLOR[c]).toMatch(/^0x[0-9a-f]{6}$/);
       }),
     );
   });
 
-  it('every StarSize has a positive pixel radius in the expected range', () => {
+  it('body and halo of the same star differ (white allowed to match)', () => {
     fc.assert(
-      fc.property(sizeClassArb, (s) => {
-        const r = STAR_RADIUS_PX_FOR_SIZE[s];
-        expect(r).toBeGreaterThan(0);
-        expect(r).toBeLessThan(10);
+      fc.property(colorArb, (c) => {
+        if (c === 'White') {
+          // Both whitish — allowed.
+          return;
+        }
+        expect(STAR_COLOR_FOR_COLOR[c]).not.toBe(STAR_HALO_COLOR_FOR_COLOR[c]);
       }),
     );
   });
 
-  it('size ordering is strictly Dwarf < Standard < Giant < Supergiant', () => {
-    expect(STAR_RADIUS_PX_FOR_SIZE.Dwarf).toBeLessThan(
-      STAR_RADIUS_PX_FOR_SIZE.Standard,
-    );
-    expect(STAR_RADIUS_PX_FOR_SIZE.Standard).toBeLessThan(
-      STAR_RADIUS_PX_FOR_SIZE.Giant,
-    );
-    expect(STAR_RADIUS_PX_FOR_SIZE.Giant).toBeLessThan(
-      STAR_RADIUS_PX_FOR_SIZE.Supergiant,
-    );
-  });
-
-  it('blur strength is positive and follows the same size ordering', () => {
-    for (const s of STAR_SIZES) {
-      expect(STAR_BLUR_PX_FOR_SIZE[s]).toBeGreaterThan(0);
+  it('bodyPx is monotonic non-decreasing in size and lands in [1, 5]', () => {
+    let prev = -1;
+    for (let s = STAR_SIZE_MIN; s <= STAR_SIZE_MAX; s++) {
+      const r = starBodyPx(s);
+      expect(r).toBeGreaterThanOrEqual(1);
+      expect(r).toBeLessThanOrEqual(5);
+      expect(r).toBeGreaterThanOrEqual(prev);
+      prev = r;
     }
-    expect(STAR_BLUR_PX_FOR_SIZE.Dwarf).toBeLessThan(
-      STAR_BLUR_PX_FOR_SIZE.Standard,
-    );
-    expect(STAR_BLUR_PX_FOR_SIZE.Standard).toBeLessThan(
-      STAR_BLUR_PX_FOR_SIZE.Giant,
-    );
-    expect(STAR_BLUR_PX_FOR_SIZE.Giant).toBeLessThan(
-      STAR_BLUR_PX_FOR_SIZE.Supergiant,
+  });
+
+  it('bloomPx > bodyPx and haloPx > bloomPx for every valid size', () => {
+    fc.assert(
+      fc.property(sizeValueArb, (s) => {
+        const body = starBodyPx(s);
+        const bloom = starBloomPx(s);
+        const halo = starHaloPx(s);
+        expect(bloom).toBeGreaterThan(body);
+        expect(halo).toBeGreaterThan(bloom);
+      }),
     );
   });
 
-  it('the glow halo is strictly larger than the body', () => {
-    expect(STAR_GLOW_RATIO).toBeGreaterThan(1);
-    expect(STAR_GLOW_ALPHA).toBeGreaterThan(0);
-    expect(STAR_GLOW_ALPHA).toBeLessThan(STAR_BODY_ALPHA);
+  it('halo blur is the heaviest of the three blur layers', () => {
+    fc.assert(
+      fc.property(sizeValueArb, (s) => {
+        expect(starHaloBlurPx(s)).toBeGreaterThanOrEqual(starBloomBlurPx(s));
+        expect(starBloomBlurPx(s)).toBeGreaterThanOrEqual(starCoreBlurPx(s));
+      }),
+    );
   });
 
-  it('body and glow colours of the same star differ (or the star is white)', () => {
-    // For each kind, body and glow should not be the same hex value —
-    // otherwise the halo has no visual punch. White is the only
-    // exception allowed (body/glow are both whitish).
-    for (const k of STAR_KINDS) {
-      if (k === 'White') {
-        expect(STAR_COLOR_FOR_KIND.White).toMatch(/^0x[0-9a-f]{6}$/);
-        expect(STAR_GLOW_COLOR_FOR_KIND.White).toMatch(/^0x[0-9a-f]{6}$/);
-        continue;
-      }
-      expect(STAR_COLOR_FOR_KIND[k]).not.toBe(STAR_GLOW_COLOR_FOR_KIND[k]);
+  it('halo blur is monotonic non-decreasing in size', () => {
+    let prev = -1;
+    for (let s = STAR_SIZE_MIN; s <= STAR_SIZE_MAX; s++) {
+      const b = starHaloBlurPx(s);
+      expect(b).toBeGreaterThanOrEqual(prev);
+      prev = b;
     }
+  });
+
+  it('alpha values are well-ordered (halo dimmest, core opaque)', () => {
+    expect(STAR_HALO_ALPHA).toBeGreaterThan(0);
+    expect(STAR_HALO_ALPHA).toBeLessThan(STAR_BLOOM_ALPHA);
+    expect(STAR_BLOOM_ALPHA).toBeLessThan(STAR_CORE_ALPHA);
   });
 });
