@@ -57,6 +57,7 @@ const COLOR_DISC_FILL = 0x1a2545;
 const COLOR_DISC_STROKE = 0x5070b0;
 const COLOR_SELECTION_RING = 0xffd07b;
 const COLOR_STAR_SELECTED = 0xffd07b;
+const DISC_FILL_ALPHA = 0.35;
 
 /**
  * Multiplier applied to every star's rendered pixel dimensions (halo,
@@ -66,6 +67,12 @@ const COLOR_STAR_SELECTED = 0xffd07b;
  * without touching the canonical spec.
  */
 const STAR_DISPLAY_SCALE = 1.5;
+
+/**
+ * Independent multiplier on the blur strength only. Lets us soften the
+ * glow without changing star sizes.
+ */
+const STAR_BLUR_SCALE = 0.75;
 
 /**
  * Parse a "0xRRGGBB" hex string (the format used by STAR_COLOR_FOR_COLOR
@@ -261,11 +268,11 @@ export async function mountStarmap(
     const cy = Math.floor(viewport.height / 2);
     const rPx = worldRadiusPx(currentGalaxy.radius, currentCamera);
     if (rPx <= 0) return;
-    disc.circle(cx, cy, rPx).fill({ color: COLOR_DISC_FILL });
+    disc.circle(cx, cy, rPx).fill({ color: COLOR_DISC_FILL, alpha: DISC_FILL_ALPHA });
     disc.circle(cx, cy, rPx).stroke({
       width: 1.5,
       color: COLOR_DISC_STROKE,
-      alpha: 0.7,
+      alpha: 0.5,
     });
     // A faint inner ring for orientation.
     disc.circle(cx, cy, Math.floor(rPx * 0.7)).stroke({
@@ -331,7 +338,9 @@ export async function mountStarmap(
       color: 0xffffff,
       alpha: STAR_CORE_ALPHA / 255,
     });
-    glow.filters = [new BlurFilter({ strength: 2.5 * STAR_DISPLAY_SCALE })];
+    glow.filters = [
+      new BlurFilter({ strength: 2.5 * STAR_DISPLAY_SCALE * STAR_BLUR_SCALE }),
+    ];
     glow.x = sx;
     glow.y = sy;
     starsLayer.addChild(glow);
