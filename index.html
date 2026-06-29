@@ -220,6 +220,28 @@
       #status.ok { color: #6bd58f; }
       #status.err { color: #ff7b7b; }
       .back-link { font-size: 12px; color: var(--muted); }
+
+      /* ---- starmap (iter 1b) ---- */
+      .starmap-host {
+        position: relative;
+        width: 100%;
+        height: 520px;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        overflow: hidden;
+        margin-bottom: 14px;
+      }
+      #starmap-canvas { position: absolute; inset: 0; }
+      #starmap-canvas canvas { display: block; width: 100% !important; height: 100% !important; }
+      #sidepanel-host { position: absolute; inset: 0; pointer-events: none; }
+      .starmap-controls {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+        margin-bottom: 14px;
+      }
     </style>
   </head>
   <body>
@@ -248,7 +270,7 @@
             <span class="hint">Resume a saved game. (Not yet implemented.)</span>
           </button>
         </div>
-        <div class="menu-footer">v0.0.1 · Iteration 1a</div>
+        <div class="menu-footer">v0.0.2 · Iteration 1b</div>
       </div>
     </section>
 
@@ -273,6 +295,20 @@
           <span id="stat-radius" class="stat">radius: <b>–</b></span>
           <span id="stat-valid" class="stat">isValidGalaxy: <b>–</b></span>
         </div>
+
+        <!-- Starmap: PixiJS canvas + side panel, anchored relative. -->
+        <div id="starmap-host" class="starmap-host">
+          <div id="starmap-canvas"></div>
+          <div id="sidepanel-host"></div>
+        </div>
+
+        <div id="starmap-controls" class="starmap-controls">
+          <button id="zoom-in-btn" type="button">Zoom in</button>
+          <button id="zoom-out-btn" type="button">Zoom out</button>
+          <button id="clear-selection-btn" type="button">Clear selection</button>
+          <span id="starmap-status" class="stat">click: <b>–</b></span>
+        </div>
+
         <div id="galaxy-json">// Click "Generate" to build a galaxy.</div>
         <div id="status">Ready.</div>
       </main>

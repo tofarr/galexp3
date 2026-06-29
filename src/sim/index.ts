@@ -4,3 +4,4 @@
  */
 
 export * from './galaxy';
+export * from './starmap';

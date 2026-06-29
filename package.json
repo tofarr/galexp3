@@ -1,6 +1,6 @@
 {
   "name": "galexp3",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": true,
   "type": "module",
   "description": "Browser-based 4X space game (Master of Orion / Galactic Civilizations style).",
@@ -11,8 +11,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "spec": "quint",
-    "spec:simulate": "quint simulate --max-samples=1000 --max-steps=10 quint/galaxy.qnt",
-    "spec:check": "quint typecheck quint/galaxy.qnt"
+    "spec:test": "for f in quint/galaxy.qnt quint/starmap.qnt; do npx quint test --match='.*' \"$f\"; done",
+    "spec:check": "for f in quint/galaxy.qnt quint/starmap.qnt; do npx quint typecheck \"$f\"; done"
   },
   "dependencies": {
     "pixi.js": "^8.19.0"
