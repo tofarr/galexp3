@@ -25,7 +25,7 @@
  * module is a dumb projection of state into shapes.
  */
 
-import { Application, BlurFilter, Container, Graphics, Rectangle } from 'pixi.js';
+import { Application, BlurFilter, Container, Graphics } from 'pixi.js';
 import {
   HIT_RADIUS_PX,
   NO_SELECTION,
@@ -43,11 +43,8 @@ import {
   STAR_CORE_ALPHA,
   STAR_HALO_ALPHA,
   STAR_HALO_COLOR_FOR_COLOR,
-  starBloomBlurPx,
   starBloomPx,
   starBodyPx,
-  starCoreBlurPx,
-  starHaloBlurPx,
   starHaloPx,
   type StarColor,
 } from '../sim/galaxy';
@@ -60,6 +57,15 @@ const COLOR_DISC_FILL = 0x1a2545;
 const COLOR_DISC_STROKE = 0x5070b0;
 const COLOR_SELECTION_RING = 0xffd07b;
 const COLOR_STAR_SELECTED = 0xffd07b;
+
+/**
+ * Multiplier applied to every star's rendered pixel dimensions (halo,
+ * bloom, core, highlight radius, and blur strength). The procedural
+ * sizes produced by `star*Px()` mirror the Quint spec exactly; this
+ * constant is a pure UI tuning knob so the visual size can be dialed
+ * without touching the canonical spec.
+ */
+const STAR_DISPLAY_SCALE = 1.5;
 
 /**
  * Parse a "0xRRGGBB" hex string (the format used by STAR_COLOR_FOR_COLOR
@@ -293,13 +299,10 @@ export async function mountStarmap(
   ): void {
     const bodyRadius = Math.max(
       1,
-      Math.round(starBodyPx(size) + (isSelected ? 2 : 0)),
+      Math.round(starBodyPx(size) * STAR_DISPLAY_SCALE + (isSelected ? 2 : 0)),
     );
-    const bloomRadius = starBloomPx(size);
-    const haloRadius = starHaloPx(size);
-    const haloBlur = starHaloBlurPx(size);
-    const bloomBlur = starBloomBlurPx(size);
-    const coreBlur = starCoreBlurPx(size);
+    const bloomRadius = Math.round(starBloomPx(size) * STAR_DISPLAY_SCALE);
+    const haloRadius = Math.round(starHaloPx(size) * STAR_DISPLAY_SCALE);
 
     const bodyColor = isSelected
       ? COLOR_STAR_SELECTED
@@ -308,71 +311,39 @@ export async function mountStarmap(
       ? COLOR_STAR_SELECTED
       : parseHexColor(STAR_HALO_COLOR_FOR_COLOR[color]);
 
-    // ---- Layer 1: outer halo (heavy blur) ----------------------------
-    const halo = new Graphics();
-    halo.circle(0, 0, haloRadius).fill({
+    // ---- One blurred star ----------------------------------------------
+    // The glow (halo + bloom + white core) is rendered on a single
+    // Graphics so a single BlurFilter can be applied. filterArea is
+    // intentionally NOT set — PixiJS v8 auto-computes it from the
+    // children's local bounds, which (since every circle is drawn at
+    // local origin) is a rectangle centred on (0,0). The previous
+    // per-layer manual filterArea caused off-centre rendering.
+    const glow = new Graphics();
+    glow.circle(0, 0, haloRadius).fill({
       color: haloColor,
       alpha: STAR_HALO_ALPHA / 255,
     });
-    halo.circle(0, 0, haloRadius).stroke({
-      width: 0,
-      color: haloColor,
-      alpha: 0,
-    });
-    const haloHalf = Math.ceil(haloRadius + haloBlur * 3 + 2);
-    halo.filterArea = new Rectangle(
-      -haloHalf,
-      -haloHalf,
-      haloHalf * 2,
-      haloHalf * 2,
-    );
-    halo.filters = [new BlurFilter({ strength: haloBlur })];
-    halo.x = sx;
-    halo.y = sy;
-    starsLayer.addChild(halo);
-
-    // ---- Layer 2: inner bloom (medium blur) --------------------------
-    const bloom = new Graphics();
-    bloom.circle(0, 0, bloomRadius).fill({
+    glow.circle(0, 0, bloomRadius).fill({
       color: bodyColor,
       alpha: STAR_BLOOM_ALPHA / 255,
     });
-    const bloomHalf = Math.ceil(bloomRadius + bloomBlur * 3 + 2);
-    bloom.filterArea = new Rectangle(
-      -bloomHalf,
-      -bloomHalf,
-      bloomHalf * 2,
-      bloomHalf * 2,
-    );
-    bloom.filters = [new BlurFilter({ strength: bloomBlur })];
-    bloom.x = sx;
-    bloom.y = sy;
-    starsLayer.addChild(bloom);
-
-    // ---- Layer 3: white core (lesser blur) ---------------------------
-    const core = new Graphics();
-    core.circle(0, 0, bodyRadius).fill({
+    glow.circle(0, 0, bodyRadius).fill({
       color: 0xffffff,
       alpha: STAR_CORE_ALPHA / 255,
     });
-    if (coreBlur > 0) {
-      const coreHalf = Math.ceil(bodyRadius + coreBlur * 3 + 2);
-      core.filterArea = new Rectangle(
-        -coreHalf,
-        -coreHalf,
-        coreHalf * 2,
-        coreHalf * 2,
-      );
-      core.filters = [new BlurFilter({ strength: coreBlur })];
-    }
-    core.x = sx;
-    core.y = sy;
-    starsLayer.addChild(core);
+    glow.filters = [new BlurFilter({ strength: 2.5 * STAR_DISPLAY_SCALE })];
+    glow.x = sx;
+    glow.y = sy;
+    starsLayer.addChild(glow);
 
-    // ---- Layer 4: sharp highlight dot --------------------------------
-    // Tiny unblurred point at the very centre so even the brightest
-    // stars have a pixel-precise highlight against the soft core.
-    const highlightRadius = Math.max(0.5, bodyRadius * 0.4);
+    // ---- Sharp highlight dot ------------------------------------------
+    // Rendered separately, outside the blurred Graphics, so the very
+    // brightest stars still have a pixel-precise point of light against
+    // the soft glow.
+    const highlightRadius = Math.max(
+      0.5,
+      bodyRadius * 0.4 * STAR_DISPLAY_SCALE,
+    );
     const highlight = new Graphics();
     highlight.circle(0, 0, highlightRadius).fill({
       color: 0xffffff,

@@ -166,6 +166,88 @@ when new patterns, decisions, or gotchas are discovered.
   (behind disc); this is intentional so the disc reads as a region
   of dense gas rather than a window into a star cloud.
 
+### Iter 1f — Halo-positioning bug fix (and post-fix tuning)
+
+**Scope:**
+- Fixed a reported bug: star halos rendered mis-positioned
+  (concentrated bottom-right of the star, with a diagonal clip
+  edge through the halo) on *some* stars but not all, in a zoom-
+  dependent way.
+- Rebuilt `paintStar` to use **one blurred `Graphics` per star**
+  (halo + bloom + white core as concentric fills at local origin)
+  with a single `BlurFilter`. The sharp highlight dot is a
+  separate unblurred `Graphics`.
+- No manual `filterArea` anywhere — PixiJS v8 auto-computes the
+  filter bounds from the children's local geometry.
+- Iteratively dialed in the look: blur 10 → 5 → 2.5px (kept at
+  2.5px); added `STAR_DISPLAY_SCALE = 1.5` so every visual
+  dimension (halo/bloom/core radii, highlight radius, blur
+  strength) is multiplied together, preserving the proportions
+  we settled on while making stars render 1.5× larger.
+
+**Spec mirror:**
+- No Quint spec change. Visual sizing in `src/sim/galaxy.ts`
+  still mirrors `STAR_BODY_PX/BLOOM/HALO_PX` exactly. The 1.5×
+  multiplier is a pure UI tuning knob in `src/ui/starmap.ts`
+  (`STAR_DISPLAY_SCALE`) — intentionally NOT in the spec layer,
+  since the spec is the canonical "what does a star look like in
+  the simulation" and the multiplier is "how does it render in
+  this particular UI iteration".
+- `starBloomBlurPx`/`starCoreBlurPx`/`starHaloBlurPx` are still
+  in `src/sim/galaxy.ts` (and tested in `src/sim/galaxy.test.ts`)
+  — unused in `starmap.ts` for now, kept available for a future
+  iteration that wants multi-strength blurs again.
+
+**Decisions logged:**
+- **Root cause of the halo-positioning bug**:
+  When per-layer `Graphics` (halo / bloom / core) each had their
+  own `BlurFilter` **and** an explicit `filterArea` set to
+  `(-haloHalf, -haloHalf, 2*haloHalf, 2*haloHalf)` (negative
+  origin, centred on local 0,0), some stars rendered with the
+  halo offset toward the bottom-right and partially clipped.
+  The bug was zoom-dependent and affected only a subset of stars
+  — consistent with subpixel / rounding inconsistency in the
+  per-star filter-area + bounds pipeline when stars overlap on
+  screen.
+- **Fix**: collapse to one blurred `Graphics` per star with no
+  manual `filterArea`. PixiJS v8's auto-compute derives a centred
+  `filterArea` from the children's local geometry (every circle
+  is drawn at local origin → bounds are symmetric). User
+  empirically confirmed no-blur rendered correctly, then a single
+  `BlurFilter(10)` on the merged `Graphics` rendered correctly
+  too — confirming the bug was in the manual multi-layer setup,
+  not in the BlurFilter itself.
+- **One blur at a fixed strength (2.5px)**, not three separate
+  blurs at size-derived strengths. The previous three-strength
+  approach (halo heaviest, core lightest) was driven by the
+  per-layer design. With one filter that distinction goes away
+  — and the simpler path renders identically visually, with
+  fewer draw calls and no per-layer `filterArea` to misbehave.
+- **`STAR_DISPLAY_SCALE` lives in the UI layer, not the spec**.
+  Future iteration: if we decide 1.5× is the canonical "right"
+  size, bake it into `STAR_BODY_PX` in `quint/galaxy.qnt` and
+  remove the constant. Until then it's a tuning knob.
+- The sharp highlight dot is **outside** the blurred `Graphics`
+  on purpose — it gives bright stars a pixel-precise centre
+  against the soft glow.
+
+**Debugging breadcrumbs for the future:**
+- In PixiJS v8, putting multiple `BlurFilter`s on per-layer
+  `Graphics` (especially with manual negative-half `filterArea` in
+  local coords) is fragile. If you see offset/clipped halos, the
+  first thing to try is collapsing to one blurred `Graphics` per
+  logical object and dropping manual `filterArea`. The auto-
+  computed `filterArea` is reliably centred for geometry drawn at
+  local origin.
+- Sanity check: if the visual position of a blurred layer is
+  wrong on *some* shapes but not all, disable blur entirely. If
+  the no-blur render is correct and the blurred render is wrong,
+  the bug is filter-pipeline-side, not geometry-side. This
+  bisection is fast and saves hours of digging through
+  `Bounds.applyMatrix` internals.
+- `BlurFilter.strength` accepts floats (not just integers). 2.5
+  is a valid, working value.
+
 ## Layout
 
 ```
