@@ -411,18 +411,6 @@ export function zoomCameraAround(
 }
 
 // ---------------------------------------------------------------------------
-// Display helpers (TS-only)
-// ---------------------------------------------------------------------------
-
-/**
- * Display name for a star. For v1 this is just "Star #N".
- * A future iteration will plug a proper naming generator in here.
- */
-export function starName(id: number): string {
-  return `Star #${id}`;
-}
-
-// ---------------------------------------------------------------------------
 // Parity test values
 // ---------------------------------------------------------------------------
 

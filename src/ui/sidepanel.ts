@@ -13,7 +13,7 @@
  */
 
 import type { GalaxySubset } from '../sim/starmap';
-import { NO_SELECTION, starName } from '../sim/starmap';
+import { NO_SELECTION } from '../sim/starmap';
 
 // ---------------------------------------------------------------------------
 // DOM structure
@@ -145,7 +145,7 @@ export function mountSidePanel(container: HTMLElement): SidePanel {
       clear();
       return;
     }
-    nameEl.textContent = starName(star.id);
+    nameEl.textContent = star.name;
     nameEl.style.display = '';
     empty.style.display = 'none';
     panel.classList.add(PANEL_VISIBLE_CLASS, PANEL_OPEN_CLASS);

@@ -32,7 +32,6 @@ import {
   panTo as panCameraTo,
   projectOrigin,
   projectStar,
-  starName,
   unprojectPoint,
   zoomCameraAround,
   type Camera,
@@ -620,9 +619,6 @@ export async function mountStarmap(
 // ---------------------------------------------------------------------------
 // Exports for the side panel
 // ---------------------------------------------------------------------------
-
-/** Re-export starName so the UI layer can label the selection. */
-export { starName };
 
 /**
  * Test seam — paint one star into a fresh Graphics so unit tests

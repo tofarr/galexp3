@@ -78,7 +78,8 @@ module galaxy {
     id: StarId,
     color: StarColor,
     size: int,
-    position: Position
+    position: Position,
+    name: str
   }
 
   /// Galaxy size presets. Star counts come from Master of Orion (1993):
@@ -245,6 +246,30 @@ module galaxy {
   pure val STAR_CORE_ALPHA: int = 255
 
   // ---------------------------------------------------------------------------
+  // Star naming
+  // ---------------------------------------------------------------------------
+
+  /// Pools used to compose a sci-fi star name: `<Prefix> <Suffix>`.
+  /// The TS mirror `src/sim/names.ts` is the source of truth for the
+  /// actual word lists; these quint tables are placeholders kept in
+  /// sync by hand so the spec mentions the naming scheme.
+  ///
+  /// Suffixes are deliberately a small set so each prefix tends to
+  /// collide with one or two others, forcing the collision-handler
+  /// in `nameStars` to exercise its disambiguator branch.
+  pure val STAR_NAME_PREFIXES: Set[str] = {
+    "Aldebaran", "Vega", "Rigel", "Sirius", "Deneb", "Altair",
+    "Antares", "Polaris", "Castor", "Pollux", "Proxima", "Cygnus",
+    "Lyra", "Hydra", "Orion", "Phoenix", "Andromeda", "Perseus",
+    "Taurus", "Helios", "Astra", "Nova", "Eridanus"
+  }
+
+  pure val STAR_NAME_SUFFIXES: Set[str] = {
+    "Prime", "Major", "Minor", "Secundus", "Tertius", "Alpha",
+    "Beta", "Gamma", "Delta", "Epsilon"
+  }
+
+  // ---------------------------------------------------------------------------
   // Predicates
   // ---------------------------------------------------------------------------
 
@@ -260,6 +285,11 @@ module galaxy {
   /// True iff every star in the galaxy has a unique id.
   pure def starIdsUnique(g: Galaxy): bool =
     g.stars.size() == g.stars.map(s => s.id).size()
+
+  /// True iff every star in the galaxy has a non-empty, unique name.
+  pure def starNamesUnique(g: Galaxy): bool =
+    g.stars.forall(s => s.name != "") and
+    g.stars.size() == g.stars.map(s => s.name).size()
 
   /// True iff no two stars occupy the same position (exact equality).
   /// Poisson-disk sampling in TS will enforce a minimum distance,
@@ -291,6 +321,7 @@ module galaxy {
     starCountMatchesSize(g)
     and radiusMatchesSize(g)
     and starIdsUnique(g)
+    and starNamesUnique(g)
     and allStarsWithinBounds(g)
     and noDuplicatePositions(g)
     and allStarsHaveValidSize(g)

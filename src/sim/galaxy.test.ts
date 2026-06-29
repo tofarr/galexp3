@@ -233,6 +233,7 @@ describe('isValidGalaxy — top-level predicate', () => {
           color: 'White' as StarColor,
           size: 50,
           position: { x: r * 10, y: 0 },
+          name: 'Far',
         },
         ...g.stars.slice(1),
       ],
@@ -331,5 +332,111 @@ describe('star appearance formulas', () => {
     expect(STAR_HALO_ALPHA).toBeGreaterThan(0);
     expect(STAR_HALO_ALPHA).toBeLessThan(STAR_BLOOM_ALPHA);
     expect(STAR_BLOOM_ALPHA).toBeLessThan(STAR_CORE_ALPHA);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Star naming (src/sim/names.ts)
+// ---------------------------------------------------------------------------
+
+describe('initGalaxy — star names', () => {
+  it('every star gets a non-empty name', () => {
+    fc.assert(
+      fc.property(sizeArb, seedArb, (size, seed) => {
+        const g = initGalaxy(seed, size);
+        for (const s of g.stars) {
+          expect(s.name).toBeTypeOf('string');
+          expect(s.name.length).toBeGreaterThan(0);
+        }
+      }),
+    );
+  });
+
+  it('star names are unique within a galaxy', () => {
+    fc.assert(
+      fc.property(sizeArb, seedArb, (size, seed) => {
+        const g = initGalaxy(seed, size);
+        const seen = new Set<string>();
+        for (const s of g.stars) {
+          expect(seen.has(s.name)).toBe(false);
+          seen.add(s.name);
+        }
+        expect(seen.size).toBe(g.stars.length);
+      }),
+    );
+  });
+
+  it('same (seed, size) -> same star names (determinism)', () => {
+    fc.assert(
+      fc.property(sizeArb, seedArb, (size, seed) => {
+        const a = initGalaxy(seed, size);
+        const b = initGalaxy(seed, size);
+        const namesA = a.stars.map((s) => s.name);
+        const namesB = b.stars.map((s) => s.name);
+        expect(namesA).toEqual(namesB);
+      }),
+    );
+  });
+
+  it('different seeds -> different name streams (sanity)', () => {
+    // Two random seeds should produce different name lists unless we
+    // are catastrophically unlucky (collision probability is
+    // (N / pool)^N; astronomically small for any galaxy size).
+    const g1 = initGalaxy(1, 'Medium');
+    const g2 = initGalaxy(2, 'Medium');
+    expect(g1.stars.map((s) => s.name)).not.toEqual(
+      g2.stars.map((s) => s.name),
+    );
+  });
+
+  it('names look sci-fi: "<Capitalised word> <Capitalised word>"', () => {
+    // Pattern intentionally loose — both words start with an
+    // uppercase letter, contain only ASCII letters, and the whole
+    // name has exactly one separating space. This catches obvious
+    // regressions (empty name, garbage chars, leading/trailing
+    // spaces, multi-word suffixes, etc.).
+    const name = /^[A-Z][a-zA-Z]+ [A-Z][a-zA-Z]+$/;
+    fc.assert(
+      fc.property(sizeArb, seedArb, (size, seed) => {
+        const g = initGalaxy(seed, size);
+        for (const s of g.stars) {
+          expect(s.name).toMatch(name);
+        }
+      }),
+    );
+  });
+
+  it('isValidGalaxy rejects galaxies with duplicate names', () => {
+    const size: GalaxySize = 'Small';
+    const g = initGalaxy(7, size);
+    const dup = {
+      ...g,
+      stars: g.stars.map((s, i) => ({
+        ...s,
+        name: i === 0 ? g.stars[1]!.name : s.name,
+      })),
+    };
+    expect(isValidGalaxy(dup)).toBe(false);
+  });
+
+  it('isValidGalaxy rejects galaxies with empty names', () => {
+    const size: GalaxySize = 'Small';
+    const g = initGalaxy(8, size);
+    const broken = {
+      ...g,
+      stars: g.stars.map((s, i) => (i === 0 ? { ...s, name: '' } : s)),
+    };
+    expect(isValidGalaxy(broken)).toBe(false);
+  });
+
+  it('uses varied prefixes — not "10 Phoenixes in a row"', () => {
+    // Distribution sanity: a galaxy of 24 stars should use far
+    // more than one prefix among its first few names. If all
+    // names shared a prefix, the generator would be draining a
+    // single column of the prefix×suffix grid before moving on.
+    const g = initGalaxy(42, 'Large');
+    const prefixes = new Set(g.stars.map((s) => s.name.split(' ')[0]));
+    // 48 stars / 60 prefixes should easily use >10 distinct ones.
+    expect(prefixes.size).toBeGreaterThan(10);
   });
 });

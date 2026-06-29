@@ -1,3 +1,5 @@
+import { nameStars } from './names';
+
 /**
  * Galaxy data model.
  *
@@ -177,6 +179,7 @@ export interface Star {
   readonly color: StarColor;
   readonly size: number;
   readonly position: Position;
+  readonly name: string;
 }
 
 export interface Galaxy {
@@ -269,7 +272,9 @@ export function initGalaxy(seed: number, size: GalaxySize): Galaxy {
   const targetCount = STAR_COUNT_FOR_SIZE[size];
   let minDist = minStarDistance(targetCount, radius);
 
-  const stars: Star[] = [];
+  // Staged as `Omit<Star, 'name'>` because names are assigned in a
+  // single pass after placement completes (see nameStars()).
+  const stars: Array<Omit<Star, 'name'>> = [];
   let safety = 0;
   const SAFETY_LIMIT = 1000;
 
@@ -316,7 +321,7 @@ export function initGalaxy(seed: number, size: GalaxySize): Galaxy {
   return {
     size,
     radius,
-    stars,
+    stars: nameStars(stars, rng),
   };
 }
 
@@ -329,10 +334,15 @@ export function isValidGalaxy(g: Galaxy): boolean {
   if (g.radius !== RADIUS_FOR_SIZE[g.size]) return false;
 
   const seenIds = new Set<number>();
+  const seenNames = new Set<string>();
   const seenPositions = new Set<string>();
   for (const s of g.stars) {
     if (seenIds.has(s.id)) return false;
     seenIds.add(s.id);
+
+    if (s.name === '') return false;
+    if (seenNames.has(s.name)) return false;
+    seenNames.add(s.name);
 
     const key = `${s.position.x}|${s.position.y}`;
     if (seenPositions.has(key)) return false;
