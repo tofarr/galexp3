@@ -29,8 +29,12 @@ import { Application, BlurFilter, Container, Graphics } from 'pixi.js';
 import {
   HIT_RADIUS_PX,
   NO_SELECTION,
+  panTo as panCameraTo,
+  projectOrigin,
   projectStar,
   starName,
+  unprojectPoint,
+  zoomCameraAround,
   type Camera,
   type GalaxySubset,
   type ScreenPoint,
@@ -55,7 +59,9 @@ import {
 
 const COLOR_DISC_FILL = 0x1a2545;
 const COLOR_DISC_STROKE = 0x5070b0;
-const COLOR_SELECTION_RING = 0xffd07b;
+// Selection ring matches the galaxy disc stroke so the two rings
+// read as the same "outline" hue across the starmap.
+const COLOR_SELECTION_RING = COLOR_DISC_STROKE;
 const COLOR_STAR_SELECTED = 0xffd07b;
 const DISC_FILL_ALPHA = 0.35;
 
@@ -176,6 +182,36 @@ export interface StarmapRenderer {
   setSelection(selectedId: number): void;
   /** Update the galaxy and rebuild star graphics. */
   setGalaxy(galaxy: GalaxySubset): void;
+  /** The camera currently being rendered. May differ from the sim
+   *  source-of-truth while a zoom tween is in flight. */
+  getCamera(): Camera;
+  /**
+   * Animate a multiplicative zoom centred on `anchor`, using the
+   * same zoom-preserves-anchor math as the rest of the sim. Returns
+   * a promise that resolves with the final camera when the tween
+   * completes (or rejects with `'Superseded'` if a newer tween is
+   * started before this one finishes).
+   */
+  zoomBy(factorPct: number, anchor: ScreenPoint): Promise<Camera>;
+  /**
+   * Animate the camera so that `worldPoint` ends up at the screen
+   * centre. Zoom is preserved. The same promise semantics as
+   * `zoomBy` — resolves with the final camera or rejects with
+   * `'Superseded'` if a newer tween pre-empts this one.
+   */
+  panTo(
+    worldPoint: { readonly x: number; readonly y: number },
+    durationMs: number,
+  ): Promise<Camera>;
+  /**
+   * Convert a click in container-local client coordinates to a
+   * world-space Position using the currently rendered camera.
+   * Useful for click-to-recenter handlers.
+   */
+  worldPointFromClient(clientX: number, clientY: number): {
+    readonly x: number;
+    readonly y: number;
+  };
   /** Convert a screen point (clientX/clientY in container coords) into a sim ScreenPoint. */
   screenPointFromClient(clientX: number, clientY: number): ScreenPoint;
   /** Current viewport in pixels. */
@@ -262,12 +298,146 @@ export async function mountStarmap(
     app.renderer.render(app.stage);
   }
 
+  // -------------------------------------------------------------------------
+  // Zoom animation
+  // -------------------------------------------------------------------------
+  //
+  // A small requestAnimationFrame-friendly tween system that lerps the
+  // camera from its current rendered value to a target. Used by the zoom
+  // buttons so clicking "zoom in" glides instead of snapping. Pan is
+  // lerped linearly alongside zoom; for a centre-anchored zoom the target
+  // pan equals the source pan (the anchor-preserving math gives
+  // `newPan = oldPan` when `anchor = (cx, cy)`), so this lerp is a no-op
+  // and the centred world point stays exactly under the centre throughout
+  // the tween — no drift.
+  //
+  // A new tween supersedes any in-flight one (its promise rejects with
+  // `'Superseded'`); the caller can ignore that.
+
+  const ZOOM_ANIMATION_MS = 180;
+
+  type ActiveTween = {
+    from: Camera;
+    to: Camera;
+    startTime: number;
+    duration: number;
+    resolve: (camera: Camera) => void;
+    reject: (reason: Error) => void;
+  };
+
+  let activeTween: ActiveTween | null = null;
+
+  function easeOutCubic(t: number): number {
+    return 1 - Math.pow(1 - t, 3);
+  }
+
+  let activeRaf: number | null = null;
+
+  function startCameraTween(target: Camera, durationMs: number): Promise<Camera> {
+    if (activeTween) {
+      const old = activeTween;
+      activeTween = null;
+      old.reject(new Error('Superseded'));
+    }
+    const tween: ActiveTween = {
+      from: {
+        pan: { x: currentCamera.pan.x, y: currentCamera.pan.y },
+        zoom: currentCamera.zoom,
+      },
+      to: { pan: { x: target.pan.x, y: target.pan.y }, zoom: target.zoom },
+      startTime: performance.now(),
+      duration: Math.max(1, durationMs),
+      resolve: () => {},
+      reject: () => {},
+    };
+    activeTween = tween;
+    return new Promise<Camera>((resolve, reject) => {
+      tween.resolve = resolve;
+      tween.reject = reject;
+      if (activeRaf !== null) cancelAnimationFrame(activeRaf);
+      activeRaf = requestAnimationFrame(tickCameraTween);
+    });
+  }
+
+  function tickCameraTween(): void {
+    activeRaf = null;
+    if (!activeTween) return;
+    const { from, to, startTime, duration, resolve } = activeTween;
+    const raw = (performance.now() - startTime) / duration;
+    const t = raw >= 1 ? 1 : raw <= 0 ? 0 : raw;
+    const eased = easeOutCubic(t);
+    currentCamera = {
+      pan: {
+        x: from.pan.x + (to.pan.x - from.pan.x) * eased,
+        y: from.pan.y + (to.pan.y - from.pan.y) * eased,
+      },
+      zoom: from.zoom + (to.zoom - from.zoom) * eased,
+    };
+    paintDirty = true;
+    repaint();
+    if (t >= 1) {
+      // Snap to exact target so the final frame is the precise camera.
+      currentCamera = { pan: { ...to.pan }, zoom: to.zoom };
+      paintDirty = true;
+      repaint();
+      activeTween = null;
+      resolve(to);
+    } else {
+      activeRaf = requestAnimationFrame(tickCameraTween);
+    }
+  }
+
+  function renderer_zoomBy(
+    factorPct: number,
+    anchor: ScreenPoint,
+  ): Promise<Camera> {
+    // zoomCameraAround needs a StarmapState but only reads .camera.
+    const fromState: StarmapState = {
+      camera: currentCamera,
+      selectedId: NO_SELECTION,
+    };
+    const next = zoomCameraAround(
+      fromState,
+      factorPct,
+      anchor,
+      viewport,
+      currentGalaxy.radius,
+    );
+    return startCameraTween(next.camera, ZOOM_ANIMATION_MS);
+  }
+
+  function renderer_panTo(
+    worldPoint: { readonly x: number; readonly y: number },
+    durationMs: number,
+  ): Promise<Camera> {
+    // panCameraTo reads only .camera.
+    const fromState: StarmapState = {
+      camera: currentCamera,
+      selectedId: NO_SELECTION,
+    };
+    const next = panCameraTo(fromState, worldPoint);
+    return startCameraTween(next.camera, Math.max(1, durationMs));
+  }
+
+  function unprojectClient(clientX: number, clientY: number) {
+    return unprojectPoint(
+      clientToCanvas(clientX, clientY),
+      currentCamera,
+      viewport,
+      currentGalaxy.radius,
+    );
+  }
+
   function paintDisc(): void {
     disc.clear();
-    const cx = Math.floor(viewport.width / 2);
-    const cy = Math.floor(viewport.height / 2);
     const rPx = worldRadiusPx(currentGalaxy.radius, currentCamera);
     if (rPx <= 0) return;
+    // The disc is anchored at the galaxy origin in world space, so
+    // its screen position is the projected origin — not the viewport
+    // centre. This makes the disc move with the camera pan.
+    const origin = projectOrigin(currentCamera, viewport, currentGalaxy.radius);
+    const cx = origin.sx;
+    const cy = origin.sy;
     disc.circle(cx, cy, rPx).fill({ color: COLOR_DISC_FILL, alpha: DISC_FILL_ALPHA });
     disc.circle(cx, cy, rPx).stroke({
       width: 1.5,
@@ -437,6 +607,10 @@ export async function mountStarmap(
     setCamera: renderer_setCamera,
     setSelection: renderer_setSelection,
     setGalaxy: renderer_setGalaxy,
+    getCamera: () => currentCamera,
+    zoomBy: renderer_zoomBy,
+    panTo: renderer_panTo,
+    worldPointFromClient: unprojectClient,
     screenPointFromClient: clientToCanvas,
     viewport,
     destroy: renderer_destroy,

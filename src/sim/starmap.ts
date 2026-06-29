@@ -158,6 +158,27 @@ export function projectStar(
 }
 
 /**
+ * Screen position of the galaxy origin (world (0, 0)) under the
+ * given camera. Equivalent to `projectStar({position:{x:0,y:0},...},
+ * c, v, radius)` without needing a synthetic Star. Used by the
+ * renderer to draw the disc / selection ring at the correct
+ * on-screen location when the camera is panned.
+ */
+export function projectOrigin(
+  c: Camera,
+  v: Viewport,
+  radius: number,
+): ScreenPoint {
+  const sPx = worldScale(v, radius, c.zoom);
+  const cx = Math.trunc(v.width / 2);
+  const cy = Math.trunc(v.height / 2);
+  return {
+    sx: cx - c.pan.x * sPx,
+    sy: cy + c.pan.y * sPx,
+  };
+}
+
+/**
  * Inverse of projectStar. Given a screen point, return the galaxy
  * point that maps to it under the current camera. The un-truncated
  * world scale is `baseScale * zoomPct`; dividing by `worldScale`
@@ -321,6 +342,33 @@ export function clampZoom(z: number): number {
   if (z < MIN_ZOOM_PCT) return MIN_ZOOM_PCT;
   if (z > MAX_ZOOM_PCT) return MAX_ZOOM_PCT;
   return z;
+}
+
+/**
+ * True iff the given world point lies inside (or on the boundary of)
+ * the galaxy disc of the given radius. The disc is centred on the
+ * galaxy origin (0, 0).
+ */
+export function isInsideGalaxy(world: Position, radius: number): boolean {
+  return world.x * world.x + world.y * world.y <= radius * radius;
+}
+
+/**
+ * Build a camera with `pan` set to `worldPoint` and `zoom` preserved.
+ * Used to recentre the view so that `worldPoint` ends up at the
+ * screen centre. Zoom is unchanged — this is a pure pan.
+ */
+export function panTo(
+  state: StarmapState,
+  worldPoint: Position,
+): StarmapState {
+  return {
+    ...state,
+    camera: {
+      ...state.camera,
+      pan: { x: worldPoint.x, y: worldPoint.y },
+    },
+  };
 }
 
 /**

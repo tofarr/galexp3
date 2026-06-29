@@ -20,12 +20,15 @@ import {
   clampZoom,
   initialCamera,
   initialState,
+  isInsideGalaxy,
   isSelectionValid,
   isStarAtPoint,
   isValidCamera,
   isValidState,
   isValidZoom,
   panCamera,
+  panTo,
+  projectOrigin,
   projectStar,
   selectStar,
   starAtPoint,
@@ -508,6 +511,144 @@ describe('starmap — clampZoom', () => {
       fc.property(zoomArb, (z) => {
         expect(clampZoom(z)).toBe(z);
       }),
+    );
+  });
+});
+
+describe('starmap — projectOrigin', () => {
+  it('returns the viewport centre when pan is zero', () => {
+    fc.assert(
+      fc.property(viewportArb, (v) => {
+        const c: Camera = { pan: { x: 0, y: 0 }, zoom: 100 };
+        const o = projectOrigin(c, v, 70);
+        expect(o.sx).toBe(Math.trunc(v.width / 2));
+        expect(o.sy).toBe(Math.trunc(v.height / 2));
+      }),
+    );
+  });
+
+  it('agrees with projectStar for world (0, 0)', () => {
+    fc.assert(
+      fc.property(viewportArb, cameraArb, (v, c) => {
+        const origin: Star = {
+          id: 0,
+          color: 'Yellow',
+          size: 0,
+          position: { x: 0, y: 0 },
+        };
+        const a = projectOrigin(c, v, 70);
+        const b = projectStar(origin, c, v, 70);
+        expect(a.sx).toBe(b.sx);
+        expect(a.sy).toBe(b.sy);
+      }),
+    );
+  });
+
+  it('positive pan.x moves the origin to the left of viewport centre', () => {
+    const v: Viewport = { width: 800, height: 600 };
+    const c: Camera = { pan: { x: 50, y: 0 }, zoom: 100 };
+    const o = projectOrigin(c, v, 70);
+    expect(o.sx).toBeLessThan(400);
+    expect(o.sy).toBe(300);
+  });
+
+  it('positive pan.y moves the origin below viewport centre (y-flipped)', () => {
+    const v: Viewport = { width: 800, height: 600 };
+    const c: Camera = { pan: { x: 0, y: 50 }, zoom: 100 };
+    const o = projectOrigin(c, v, 70);
+    expect(o.sx).toBe(400);
+    expect(o.sy).toBeGreaterThan(300);
+  });
+});
+
+describe('starmap — isInsideGalaxy', () => {
+  it('the galaxy origin is inside', () => {
+    expect(isInsideGalaxy({ x: 0, y: 0 }, 70)).toBe(true);
+  });
+
+  it('a point on the boundary is inside', () => {
+    // (±radius, 0) and (0, ±radius) all on the disc edge.
+    expect(isInsideGalaxy({ x: 70, y: 0 }, 70)).toBe(true);
+    expect(isInsideGalaxy({ x: -70, y: 0 }, 70)).toBe(true);
+    expect(isInsideGalaxy({ x: 0, y: 70 }, 70)).toBe(true);
+    expect(isInsideGalaxy({ x: 0, y: -70 }, 70)).toBe(true);
+    // pythagorean boundary point: (r/√2, r/√2)
+    const h = 70 / Math.sqrt(2);
+    expect(isInsideGalaxy({ x: h, y: h }, 70)).toBe(true);
+  });
+
+  it('a point outside is outside', () => {
+    expect(isInsideGalaxy({ x: 71, y: 0 }, 70)).toBe(false);
+    expect(isInsideGalaxy({ x: 0, y: -71 }, 70)).toBe(false);
+    const h = 50; // 50² + 50² = 5000 > 70² = 4900
+    expect(isInsideGalaxy({ x: h, y: h }, 70)).toBe(false);
+  });
+
+  it('matches the disc predicate across all galaxy sizes and points', () => {
+    fc.assert(
+      fc.property(sizeArb, (size) => {
+        const g = initGalaxy(0, size);
+        // origin: always inside
+        expect(isInsideGalaxy({ x: 0, y: 0 }, g.radius)).toBe(true);
+        // boundary: always inside (≤)
+        expect(isInsideGalaxy({ x: g.radius, y: 0 }, g.radius)).toBe(true);
+        // one past boundary: always outside
+        expect(
+          isInsideGalaxy({ x: g.radius + 1, y: 0 }, g.radius),
+        ).toBe(false);
+      }),
+    );
+  });
+});
+
+describe('starmap — panTo', () => {
+  it('sets pan to the world point and preserves zoom', () => {
+    const s = panTo(initialState, { x: 10, y: -20 });
+    expect(s.camera.pan.x).toBe(10);
+    expect(s.camera.pan.y).toBe(-20);
+    expect(s.camera.zoom).toBe(initialState.camera.zoom);
+  });
+
+  it('does not mutate the input state', () => {
+    const before = initialState;
+    panTo(initialState, { x: 10, y: -20 });
+    expect(initialState).toBe(before);
+    expect(initialState.camera.pan.x).toBe(0);
+    expect(initialState.camera.pan.y).toBe(0);
+  });
+
+  it('centring on the galaxy origin yields the initial pan', () => {
+    const s = panTo(
+      { ...initialState, camera: { pan: { x: 99, y: 99 }, zoom: 100 } },
+      { x: 0, y: 0 },
+    );
+    expect(s.camera.pan).toEqual({ x: 0, y: 0 });
+  });
+
+  it('property: any world point round-trips through project/unproject', () => {
+    // After panTo, projectStar of (x,y) should land at screen centre
+    // (cx, cy). We verify against a known viewport + radius.
+    fc.assert(
+      fc.property(
+        viewportArb,
+        fc.integer({ min: -70, max: 70 }),
+        fc.integer({ min: -70, max: 70 }),
+        (v, x, y) => {
+          const radius = 70;
+          const s = panTo(initialState, { x, y });
+          const proj = projectStar(
+            { id: 1, color: 'Yellow', size: 50, position: { x, y } },
+            s.camera,
+            v,
+            radius,
+          );
+          const cx = Math.trunc(v.width / 2);
+          const cy = Math.trunc(v.height / 2);
+          // worldScale truncates, so allow ±1 px drift.
+          expect(Math.abs(proj.sx - cx)).toBeLessThanOrEqual(1);
+          expect(Math.abs(proj.sy - cy)).toBeLessThanOrEqual(1);
+        },
+      ),
     );
   });
 });

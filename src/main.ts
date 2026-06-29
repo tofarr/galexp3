@@ -38,12 +38,13 @@ import {
   ZOOM_DENOMINATOR,
   clearSelection,
   initialState as initialStarmap,
+  isInsideGalaxy,
   isValidState,
   NO_SELECTION,
   selectStar,
   starAtPoint,
-  zoomCameraAround,
   type StarmapState,
+  type Camera,
 } from '@sim/starmap';
 import { mountMenuBackground, type MenuBackground } from './ui/menuBackground';
 import { mountStarmap, type StarmapRenderer } from './ui/starmap';
@@ -80,6 +81,9 @@ const zoomInBtn = document.getElementById('zoom-in-btn') as HTMLButtonElement;
 const zoomOutBtn = document.getElementById('zoom-out-btn') as HTMLButtonElement;
 const clearSelBtn = document.getElementById('clear-selection-btn') as HTMLButtonElement;
 const starmapStatus = document.getElementById('starmap-status')!.querySelector('b')!;
+
+/** Duration of camera animation tweens (zoom + recenter). */
+const ZOOM_ANIMATION_MS = 180;
 
 const requiredElements = {
   menuView, menuBg, gameView, backLink, headerSubtitle,
@@ -197,38 +201,62 @@ function attachStarmapEvents(): void {
     } else {
       applyState(selectStar(runtime.state, id, runtime.galaxy));
     }
+    // Click-to-recenter: if the click lies inside the galaxy disc AND
+    // no star was selected by the click, animate the camera so the
+    // world point under the cursor ends up at the screen centre.
+    // Star selections keep the camera put so the user can inspect
+    // without the view jumping around.
+    if (id === NO_SELECTION) {
+      const worldPoint = renderer.worldPointFromClient(
+        ev.clientX,
+        ev.clientY,
+      );
+      if (isInsideGalaxy(worldPoint, runtime.galaxy.radius)) {
+        renderer
+          .panTo(worldPoint, ZOOM_ANIMATION_MS)
+          .then((finalCamera) => {
+            if (!runtime) return;
+            runtime.state = { ...runtime.state, camera: finalCamera };
+          })
+          .catch(() => {
+            /* superseded by a newer tween */
+          });
+      }
+    }
   });
 
   zoomInBtn.addEventListener('click', () => {
     if (!runtime) return;
-    applyState(
-      zoomCameraAround(
-        runtime.state,
-        150,
-        {
-          sx: renderer.viewport.width / 2,
-          sy: renderer.viewport.height / 2,
-        },
-        renderer.viewport,
-        runtime.galaxy.radius,
-      ),
-    );
+    const centre = {
+      sx: renderer.viewport.width / 2,
+      sy: renderer.viewport.height / 2,
+    };
+    renderer
+      .zoomBy(150, centre)
+      .then((finalCamera: Camera) => {
+        if (!runtime) return;
+        runtime.state = { ...runtime.state, camera: finalCamera };
+      })
+      .catch(() => {
+        /* superseded by a newer zoom — ignore */
+      });
   });
 
   zoomOutBtn.addEventListener('click', () => {
     if (!runtime) return;
-    applyState(
-      zoomCameraAround(
-        runtime.state,
-        Math.floor((ZOOM_DENOMINATOR * 2) / 3),
-        {
-          sx: renderer.viewport.width / 2,
-          sy: renderer.viewport.height / 2,
-        },
-        renderer.viewport,
-        runtime.galaxy.radius,
-      ),
-    );
+    const centre = {
+      sx: renderer.viewport.width / 2,
+      sy: renderer.viewport.height / 2,
+    };
+    renderer
+      .zoomBy(Math.floor((ZOOM_DENOMINATOR * 2) / 3), centre)
+      .then((finalCamera: Camera) => {
+        if (!runtime) return;
+        runtime.state = { ...runtime.state, camera: finalCamera };
+      })
+      .catch(() => {
+        /* superseded by a newer zoom — ignore */
+      });
   });
 
   clearSelBtn.addEventListener('click', () => {
