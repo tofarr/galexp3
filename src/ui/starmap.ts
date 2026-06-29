@@ -30,6 +30,15 @@ import {
   type StarmapState,
   type Viewport,
 } from '../sim/starmap';
+import {
+  STAR_BODY_ALPHA,
+  STAR_COLOR_FOR_KIND,
+  STAR_GLOW_ALPHA,
+  STAR_GLOW_COLOR_FOR_KIND,
+  STAR_GLOW_RATIO,
+  STAR_RADIUS_PX_FOR_SIZE,
+  STAR_SIZE_FOR_KIND,
+} from '../sim/galaxy';
 
 // ---------------------------------------------------------------------------
 // Palette
@@ -37,9 +46,19 @@ import {
 
 const COLOR_DISC_FILL = 0x1a2545;
 const COLOR_DISC_STROKE = 0x5070b0;
-const COLOR_STAR_DEFAULT = 0xd0d8e8;
-const COLOR_STAR_SELECTED = 0xffd07b;
 const COLOR_SELECTION_RING = 0xffd07b;
+const COLOR_STAR_SELECTED = 0xffd07b;
+
+/**
+ * Parse a "0xRRGGBB" hex string (the format used by STAR_COLOR_FOR_KIND
+ * and friends) into a 24-bit integer suitable for PixiJS colour APIs.
+ * Returns 0 on malformed input — the appearance table is enforced by
+ * unit tests, so a 0 only happens if the spec/TS tables are tampered
+ * with at runtime, which we treat as a programmer error.
+ */
+function parseHexColor(hex: string): number {
+  return parseInt(hex, 16) | 0;
+}
 
 // ---------------------------------------------------------------------------
 // Lifecycle
@@ -149,24 +168,61 @@ export async function mountStarmap(
 
   function paintStars(): void {
     starsLayer.removeChildren();
-    const cx = Math.floor(viewport.width / 2);
-    const cy = Math.floor(viewport.height / 2);
     for (const s of currentGalaxy.stars) {
       const p = projectStar(s, currentCamera, viewport, currentGalaxy.radius);
+      const isSelected = s.id === currentSelectedId;
+      const sizeClass = STAR_SIZE_FOR_KIND[s.kind];
+      const bodyRadius = isSelected
+        ? STAR_RADIUS_PX_FOR_SIZE[sizeClass] + 2
+        : STAR_RADIUS_PX_FOR_SIZE[sizeClass];
+      const glowRadius = bodyRadius * STAR_GLOW_RATIO;
+      const bodyColor = isSelected
+        ? COLOR_STAR_SELECTED
+        : parseHexColor(STAR_COLOR_FOR_KIND[s.kind]);
+      const glowColor = isSelected
+        ? COLOR_STAR_SELECTED
+        : parseHexColor(STAR_GLOW_COLOR_FOR_KIND[s.kind]);
+
       const g = new Graphics();
-      // Disc is drawn in world units but stars are screen-space pixels;
-      // we keep a fixed 3px radius for visibility.
-      const r = s.id === currentSelectedId ? 5 : 3;
-      const color =
-        s.id === currentSelectedId ? COLOR_STAR_SELECTED : COLOR_STAR_DEFAULT;
-      g.circle(0, 0, r).fill({ color });
+
+      // Glow halo: a larger, low-alpha circle behind the body. Drawn
+      // first so the body sits on top.
+      g.circle(0, 0, glowRadius).fill({ color: glowColor, alpha: STAR_GLOW_ALPHA / 255 });
+
+      // Optional inner glow (smaller, mid alpha) to give the halo a
+      // bit of falloff — reads as a soft bloom rather than a flat
+      // ring of colour.
+      g.circle(0, 0, bodyRadius + Math.max(1, Math.floor(bodyRadius / 2)))
+        .fill({ color: glowColor, alpha: (STAR_GLOW_ALPHA * 2) / 255 });
+
+      // Body: opaque, saturated.
+      g.circle(0, 0, bodyRadius).fill({
+        color: bodyColor,
+        alpha: STAR_BODY_ALPHA / 255,
+      });
+
+      // Diffraction spikes for the brighter size classes (Giant and
+      // Supergiant). Two thin crossing lines give a four-point
+      // starburst that reads as "this star is very bright".
+      if (sizeClass === 'Giant' || sizeClass === 'Supergiant') {
+        const spikeLen = bodyRadius * 5;
+        const spikeWidth = sizeClass === 'Supergiant' ? 0.8 : 0.5;
+        const spikeAlpha = sizeClass === 'Supergiant' ? 0.6 : 0.45;
+        g.moveTo(-spikeLen, 0).lineTo(spikeLen, 0).stroke({
+          color: bodyColor,
+          width: spikeWidth,
+          alpha: spikeAlpha,
+        });
+        g.moveTo(0, -spikeLen).lineTo(0, spikeLen).stroke({
+          color: bodyColor,
+          width: spikeWidth,
+          alpha: spikeAlpha,
+        });
+      }
+
       g.x = p.sx;
       g.y = p.sy;
       starsLayer.addChild(g);
-      // Suppress unused-param warning; cx/cy are kept for future star
-      // anchoring logic (e.g., names) but not needed in iter 1b.
-      void cx;
-      void cy;
     }
   }
 

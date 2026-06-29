@@ -11,9 +11,18 @@ import {
   GALAXY_SIZES,
   GalaxySize,
   RADIUS_FOR_SIZE,
+  STAR_BODY_ALPHA,
+  STAR_COLOR_FOR_KIND,
   STAR_COUNT_FOR_SIZE,
+  STAR_GLOW_ALPHA,
+  STAR_GLOW_COLOR_FOR_KIND,
+  STAR_GLOW_RATIO,
   STAR_KINDS,
+  STAR_RADIUS_PX_FOR_SIZE,
+  STAR_SIZE_FOR_KIND,
+  STAR_SIZES,
   StarKind,
+  StarSize,
   initGalaxy,
   isValidGalaxy,
 } from './galaxy';
@@ -212,5 +221,68 @@ describe('isValidGalaxy — top-level predicate', () => {
     const g = initGalaxy(3, size);
     const wrongRadius = { ...g, radius: RADIUS_FOR_SIZE[size] + 1 };
     expect(isValidGalaxy(wrongRadius)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Star appearance tables (mirror of quint/galaxy.qnt STAR_SIZE / STAR_COLOR /
+// STAR_GLOW_COLOR / STAR_RADIUS_PX). These are pure lookup tables — we test
+// them exhaustively, no property tests needed.
+// ---------------------------------------------------------------------------
+
+describe('star appearance tables', () => {
+  const kindArb: fc.Arbitrary<StarKind> = fc.constantFrom(...STAR_KINDS);
+  const sizeClassArb: fc.Arbitrary<StarSize> = fc.constantFrom(...STAR_SIZES);
+
+  it('every StarKind has a body colour, a glow colour, and a size', () => {
+    fc.assert(
+      fc.property(kindArb, (k) => {
+        expect(STAR_COLOR_FOR_KIND[k]).toMatch(/^0x[0-9a-f]{6}$/);
+        expect(STAR_GLOW_COLOR_FOR_KIND[k]).toMatch(/^0x[0-9a-f]{6}$/);
+        expect(STAR_SIZES).toContain(STAR_SIZE_FOR_KIND[k]);
+      }),
+    );
+  });
+
+  it('every StarSize has a positive pixel radius in the expected range', () => {
+    fc.assert(
+      fc.property(sizeClassArb, (s) => {
+        const r = STAR_RADIUS_PX_FOR_SIZE[s];
+        expect(r).toBeGreaterThan(0);
+        expect(r).toBeLessThan(10);
+      }),
+    );
+  });
+
+  it('size ordering is strictly Dwarf < Standard < Giant < Supergiant', () => {
+    expect(STAR_RADIUS_PX_FOR_SIZE.Dwarf).toBeLessThan(
+      STAR_RADIUS_PX_FOR_SIZE.Standard,
+    );
+    expect(STAR_RADIUS_PX_FOR_SIZE.Standard).toBeLessThan(
+      STAR_RADIUS_PX_FOR_SIZE.Giant,
+    );
+    expect(STAR_RADIUS_PX_FOR_SIZE.Giant).toBeLessThan(
+      STAR_RADIUS_PX_FOR_SIZE.Supergiant,
+    );
+  });
+
+  it('the glow halo is strictly larger than the body', () => {
+    expect(STAR_GLOW_RATIO).toBeGreaterThan(1);
+    expect(STAR_GLOW_ALPHA).toBeGreaterThan(0);
+    expect(STAR_GLOW_ALPHA).toBeLessThan(STAR_BODY_ALPHA);
+  });
+
+  it('body and glow colours of the same star differ (or the star is white)', () => {
+    // For each kind, body and glow should not be the same hex value —
+    // otherwise the halo has no visual punch. White is the only
+    // exception allowed (body/glow are both whitish).
+    for (const k of STAR_KINDS) {
+      if (k === 'White') {
+        expect(STAR_COLOR_FOR_KIND.White).toMatch(/^0x[0-9a-f]{6}$/);
+        expect(STAR_GLOW_COLOR_FOR_KIND.White).toMatch(/^0x[0-9a-f]{6}$/);
+        continue;
+      }
+      expect(STAR_COLOR_FOR_KIND[k]).not.toBe(STAR_GLOW_COLOR_FOR_KIND[k]);
+    }
   });
 });

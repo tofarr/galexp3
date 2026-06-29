@@ -30,6 +30,78 @@ export const STAR_KINDS = [
 
 export type StarKind = (typeof STAR_KINDS)[number];
 
+/**
+ * Star physical size class. Drives both the rendered radius (in
+ * pixels) and (eventually) the resource yield of a colonised star
+ * system. Mapping from StarKind to StarSize is fixed by
+ * `STAR_SIZE_FOR_KIND`; do not vary per-galaxy.
+ */
+export const STAR_SIZES = ['Dwarf', 'Standard', 'Giant', 'Supergiant'] as const;
+export type StarSize = (typeof STAR_SIZES)[number];
+
+/**
+ * sRGB hex body colour (format "0xRRGGBB") for a star of the given
+ * kind. Mirror of STAR_COLOR in quint/galaxy.qnt.
+ */
+export type HexColor = string;
+
+export const STAR_COLOR_FOR_KIND: Record<StarKind, HexColor> = {
+  Blue: '0xb8d0ff',
+  White: '0xffffff',
+  Yellow: '0xffe680',
+  Orange: '0xffb060',
+  Red: '0xff8080',
+  Brown: '0xc08050',
+};
+
+/**
+ * sRGB hex glow-halo colour (format "0xRRGGBB") for a star of the
+ * given kind. Mirror of STAR_GLOW_COLOR in quint/galaxy.qnt.
+ */
+export const STAR_GLOW_COLOR_FOR_KIND: Record<StarKind, HexColor> = {
+  Blue: '0x6fa8ff',
+  White: '0xdde8ff',
+  Yellow: '0xffd040',
+  Orange: '0xff8030',
+  Red: '0xff5050',
+  Brown: '0xa06030',
+};
+
+/**
+ * Physical size class for a star of the given kind. Mirror of
+ * STAR_SIZE in quint/galaxy.qnt. Tuned in tandem with the renderer.
+ */
+export const STAR_SIZE_FOR_KIND: Record<StarKind, StarSize> = {
+  Blue: 'Supergiant',
+  White: 'Giant',
+  Yellow: 'Standard',
+  Orange: 'Standard',
+  Red: 'Giant',
+  Brown: 'Dwarf',
+};
+
+/**
+ * Pixel radius of a star body for a given StarSize. Mirror of
+ * STAR_RADIUS_PX in quint/galaxy.qnt. Tuned for 100% zoom; the
+ * renderer is expected to leave body size fixed (no zoom-scaling)
+ * so stars stay visible at any zoom level.
+ */
+export const STAR_RADIUS_PX_FOR_SIZE: Record<StarSize, number> = {
+  Dwarf: 2,
+  Standard: 3,
+  Giant: 4,
+  Supergiant: 5,
+};
+
+/** Glow halo radius as a multiple of the body radius. */
+export const STAR_GLOW_RATIO = 3;
+
+/** Glow halo alpha (0..255). ~0.25. */
+export const STAR_GLOW_ALPHA = 64;
+
+/** Body alpha (0..255). */
+export const STAR_BODY_ALPHA = 255;
+
 export const GALAXY_SIZES = ['Small', 'Medium', 'Large', 'Huge'] as const;
 export type GalaxySize = (typeof GALAXY_SIZES)[number];
 

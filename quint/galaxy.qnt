@@ -50,6 +50,28 @@ module galaxy {
     | Orange
     | Brown
 
+  /// Star physical size class. Drives both the rendered radius (in
+  /// pixels) and (eventually) the resource yield of a colonised star
+  /// system. Mapping from StarKind to StarSize is fixed by
+  /// `STAR_SIZE`; do not vary per-galaxy.
+  type StarSize =
+    | Dwarf
+    | Standard
+    | Giant
+    | Supergiant
+
+  /// sRGB hex colour for the body of a star of the given kind.
+  /// Format: "0xRRGGBB" (lowercase hex). Used by the renderer to
+  /// fill the star body.
+  /// (No colour-management discussion in the spec; the renderer is
+  /// expected to pass these through verbatim to its colour API.)
+  type HexColor = str
+
+  /// sRGB hex colour for the glow halo around a star of the given kind.
+  /// Same format as STAR_COLOR but with a hue chosen to read as a soft
+  /// glow against the dark disc background.
+  type HexGlowColor = str
+
   /// A star's position in the galaxy. Continuous 2D space.
   /// Units are abstract integers (rendering will scale them to pixels).
   type Position = { x: int, y: int }
@@ -106,6 +128,73 @@ module galaxy {
     else if (s == Medium) 60
     else if (s == Large)  70
     else 90
+
+  // ---------------------------------------------------------------------------
+  // Star appearance tables
+  // ---------------------------------------------------------------------------
+  //
+  // These tables bind a StarKind to its physical size class, body
+  // colour, and glow colour. The mapping is fixed — every star in every
+  // galaxy uses the same table. Gameplay relevance: StarSize will drive
+  // resource yield of a colonised star (defined in a later iteration).
+
+  /// Physical size class for a star of the given kind.
+  /// Mapping is loosely based on real stellar classification, simplified
+  /// for v1 gameplay. The exact mapping is a tuning knob; if you change
+  /// it, also change it in src/sim/galaxy.ts#STAR_SIZE_FOR_KIND.
+  pure def STAR_SIZE(k: StarKind): StarSize =
+    if (k == Blue)    Supergiant
+    else if (k == White)   Giant
+    else if (k == Yellow)  Standard
+    else if (k == Orange)  Standard
+    else if (k == Red)     Giant
+    else Dwarf  // Brown
+
+  /// sRGB hex body colour (format "0xRRGGBB") for a star of the given
+  /// kind. Colours are picked to be visually distinct against the
+  /// #1a2545 disc background while still reading as a star.
+  pure def STAR_COLOR(k: StarKind): HexColor =
+    if (k == Blue)    "0xb8d0ff"
+    else if (k == White)   "0xffffff"
+    else if (k == Yellow)  "0xffe680"
+    else if (k == Orange)  "0xffb060"
+    else if (k == Red)     "0xff8080"
+    else "0xc08050"  // Brown
+
+  /// sRGB hex glow-halo colour (format "0xRRGGBB") for a star of the
+  /// given kind. Slightly more saturated than the body, with hue
+  /// pushed toward the warm side where the body is cool and vice
+  /// versa, so the halo reads as a bloom rather than a shadow.
+  pure def STAR_GLOW_COLOR(k: StarKind): HexGlowColor =
+    if (k == Blue)    "0x6fa8ff"
+    else if (k == White)   "0xdde8ff"
+    else if (k == Yellow)  "0xffd040"
+    else if (k == Orange)  "0xff8030"
+    else if (k == Red)     "0xff5050"
+    else "0xa06030"  // Brown
+
+  /// Pixel radius of a star body for a given StarSize. Held in the
+  /// spec so the renderer is a dumb painter; the values are tuned
+  /// for a 100% zoom level. The renderer is expected to leave the
+  /// star body at a fixed pixel size (no zoom-scaling) so stars stay
+  /// visible at any zoom.
+  pure def STAR_RADIUS_PX(s: StarSize): int =
+    if (s == Dwarf)      2
+    else if (s == Standard)  3
+    else if (s == Giant)     4
+    else 5  // Supergiant
+
+  /// Glow halo radius as a multiple of the star body radius.
+  /// A single value for all sizes — keeps the visual language
+  /// consistent.
+  pure def STAR_GLOW_RATIO: int = 3
+
+  /// Glow halo alpha (0..255) for the soft outer halo. A single
+  /// value for all sizes.
+  pure def STAR_GLOW_ALPHA: int = 64   // ~0.25
+
+  /// Body alpha (0..255). Opaque bodies keep the visual punch.
+  pure def STAR_BODY_ALPHA: int = 255
 
   // ---------------------------------------------------------------------------
   // Predicates
@@ -182,4 +271,29 @@ module galaxy {
     and RADIUS(Medium) > 0
     and RADIUS(Large) > 0
     and RADIUS(Huge) > 0
+
+  /// Static assertion that every StarKind maps to a StarSize and that
+  /// the resulting StarRadius_px is in the expected 2..5 range.
+  run starRadiiAreInRange =
+    STAR_RADIUS_PX(STAR_SIZE(Blue))    > 1
+    and STAR_RADIUS_PX(STAR_SIZE(Blue))    < 10
+    and STAR_RADIUS_PX(STAR_SIZE(White))   > 1
+    and STAR_RADIUS_PX(STAR_SIZE(White))   < 10
+    and STAR_RADIUS_PX(STAR_SIZE(Yellow))  > 1
+    and STAR_RADIUS_PX(STAR_SIZE(Yellow))  < 10
+    and STAR_RADIUS_PX(STAR_SIZE(Orange))  > 1
+    and STAR_RADIUS_PX(STAR_SIZE(Orange))  < 10
+    and STAR_RADIUS_PX(STAR_SIZE(Red))     > 1
+    and STAR_RADIUS_PX(STAR_SIZE(Red))     < 10
+    and STAR_RADIUS_PX(STAR_SIZE(Brown))   > 1
+    and STAR_RADIUS_PX(STAR_SIZE(Brown))   < 10
+
+  /// Static assertion that the size ordering is sane: a Supergiant is
+  /// strictly larger than a Giant, which is strictly larger than a
+  /// Standard, which is strictly larger than a Dwarf. This anchors the
+  /// gameplay promise that larger stars yield more resources.
+  run starSizeOrdering =
+    STAR_RADIUS_PX(Supergiant) > STAR_RADIUS_PX(Giant)
+    and STAR_RADIUS_PX(Giant)     > STAR_RADIUS_PX(Standard)
+    and STAR_RADIUS_PX(Standard)  > STAR_RADIUS_PX(Dwarf)
 }
