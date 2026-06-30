@@ -719,3 +719,87 @@ required, not optional:
   600-name product grid). New test checks that >40 of 48 names
   are distinct (essentially "no duplicates in a 48-star galaxy").
   Direct check on the property we actually care about.
+
+### Iter 2k — Selection ring didn't follow camera changes
+
+**Symptom.** After zooming or panning, the selection ring stayed at
+the on-screen position it had when the star was first selected —
+i.e. it stopped tracking the star. The ring's *position* was being
+computed correctly from `projectStar(star, currentCamera, …)`, but
+it wasn't being recomputed after the camera changed.
+
+**Root cause.** The renderer's `repaint()` had two dirty-flag
+blocks:
+
+```ts
+if (paintDirty || galaxyDirty) {
+  paintDisc();
+  paintStars();
+  paintDirty = false;       // <-- cleared mid-call
+  galaxyDirty = false;
+}
+if (ringDirty || paintDirty) {  // <-- paintDirty already false
+  paintSelectionRing();
+  ringDirty = false;
+}
+```
+
+`setCamera(camera)` sets `paintDirty = true`. The first block
+runs `paintStars` and `paintDisc`, then clears `paintDirty`. The
+second block then sees `ringDirty || paintDirty` as `false || false`
+and skips the ring. The same happens on every frame of the zoom
+tween.
+
+`setSelection()` worked because it set `ringDirty = true` directly,
+not via `paintDirty` — so the bug only showed up when you changed
+the camera after selecting.
+
+**Fix.**
+- Sample dirty flags once at the top of `repaint()`, run both paint
+  blocks if needed, then clear flags. The renderer's "camera
+  changed" signal is now correctly visible to both paint blocks.
+- Extracted the ring's projection logic into a pure helper
+  `selectionRingCentre(selectedId, galaxy, camera, viewport)`
+  (exported from `src/ui/starmap.ts`). `paintSelectionRing` now
+  calls the helper. This is a no-behaviour-change refactor on its
+  own, but it makes the projection testable without spinning up
+  PixiJS.
+
+**Tests.**
+- New file `src/ui/starmap.test.ts` — 8 unit tests for
+  `selectionRingCentre`:
+  - returns null when no selection
+  - returns null when the selected id is not in the galaxy
+  - returns a projected point for a valid selection
+  - **moves when the camera zooms** (regression test)
+  - **moves when the camera pans** (regression test)
+  - agrees with `projectStar` for the same (camera, star) input
+  - returns a point for every (camera, star) pair (property test)
+  - keeps every star inside the viewport at minimum zoom
+
+The renderer-level dirty-flag ordering (the structural fix) is
+covered by a code comment at the `repaint()` site — PixiJS renderer
+tests would require jsdom + WebGL, which isn't part of the existing
+test setup (all current tests run in `environment: 'node'`).
+
+**Decisions logged.**
+- **One helper, not two.** The "find selected star" and "project it
+  to screen" steps are now combined in `selectionRingCentre`. The
+  alternative was to keep them separate and let the renderer wire
+  them together — but the renderer only ever uses them in that
+  combination, so combining them eliminates a needless abstraction
+  layer. The pure helper is exported (so it's testable) and its
+  contract is: "give me the on-screen centre of the currently
+  selected star, or null if there isn't one".
+- **Three dirty flags, not two.** Considered collapsing
+  `galaxyDirty` and `paintDirty` into a single `layoutDirty`. Kept
+  them separate because they have different cost: a galaxy change
+  rebuilds the per-star cache (O(N) allocs), while a camera change
+  just reprojects existing containers (O(N) scalar updates). The
+  separate flags preserve the original "only rebuild cache when the
+  star set actually changed" optimisation.
+- **Did not scale the ring radius with zoom** — that's a separate
+  cosmetic follow-up. The reported bug was position-only. Leaving
+  the radius at `HIT_RADIUS_PX + 4 = 16 px` keeps the ring a
+  consistent UI affordance regardless of zoom level (which is
+  arguably better UX than a ring that grows/shrinks).

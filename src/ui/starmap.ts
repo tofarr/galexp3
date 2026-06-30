@@ -308,6 +308,28 @@ export interface StarmapRenderer {
 }
 
 /**
+ * Project the on-screen centre of the selection ring, or null if there
+ * is no selection / the selected id is no longer in the galaxy. Pure
+ * function — the renderer calls it inside `paintSelectionRing`, but
+ * it's exported separately so the projection logic can be unit-tested
+ * without spinning up PixiJS.
+ */
+export function selectionRingCentre(
+  selectedId: number,
+  galaxy: GalaxySubset,
+  camera: Camera,
+  viewport: Viewport,
+): ScreenPoint | null {
+  if (selectedId === NO_SELECTION) return null;
+  for (const s of galaxy.stars) {
+    if (s.id === selectedId) {
+      return projectStar(s, camera, viewport, galaxy.radius);
+    }
+  }
+  return null;
+}
+
+/**
  * Mount the starmap renderer into a container element. The container
  * gets a PixiJS canvas fitted to its size; the renderer takes its
  * viewport from the container's bounding box on mount and re-fits
@@ -386,22 +408,43 @@ export async function mountStarmap(
   let currentSelectedId: number = initialState.selectedId;
 
   // Mark dirty flags so paint() can skip work that's already current.
+  //   galaxyDirty — star set changed (setGalaxy) — must rebuild cache
+  //                  AND repaint the ring (the cached ring projection
+  //                  references the old star positions).
+  //   paintDirty  — camera changed (setCamera, zoom tween) — must
+  //                  reproject stars AND the ring. Note that the ring
+  //                  depends on the same projection as the stars, so
+  //                  it shares paintDirty with them.
+  //   ringDirty   — selection changed (setSelection) — only the ring
+  //                  needs repainting; the star set is unchanged.
   let galaxyDirty = true;
   let paintDirty = true;
   let ringDirty = true;
 
   function repaint(): void {
-    if (paintDirty || galaxyDirty) {
+    // Sample dirty state once so the ring block can see whether the
+    // camera changed even though we clear paintDirty inside the
+    // first block. (Earlier version cleared paintDirty mid-call and
+    // the ring skipped itself on every camera change — the ring
+    // stayed at the previous frame's projected position.)
+    const needStars = paintDirty || galaxyDirty;
+    const needRing = ringDirty || paintDirty;
+    if (needStars) {
       paintDisc();
       paintStars();
-      paintDirty = false;
-      galaxyDirty = false;
     }
-    if (ringDirty || paintDirty) {
+    if (needRing) {
       paintSelectionRing();
-      ringDirty = false;
     }
-    app.renderer.render(app.stage);
+    // Reset the flags *after* both blocks have used them. The flag
+    // is shared between the two blocks on purpose: a camera change
+    // is a signal to repaint both the stars and the ring.
+    paintDirty = false;
+    galaxyDirty = false;
+    ringDirty = false;
+    if (needStars || needRing) {
+      app.renderer.render(app.stage);
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -809,13 +852,14 @@ export async function mountStarmap(
 
   function paintSelectionRing(): void {
     selectionLayer.clear();
-    if (currentSelectedId === NO_SELECTION) return;
-    const star = currentGalaxy.stars.find(
-      (s) => s.id === currentSelectedId,
+    const centre = selectionRingCentre(
+      currentSelectedId,
+      currentGalaxy,
+      currentCamera,
+      viewport,
     );
-    if (!star) return;
-    const p = projectStar(star, currentCamera, viewport, currentGalaxy.radius);
-    selectionLayer.circle(p.sx, p.sy, HIT_RADIUS_PX + 4);
+    if (centre === null) return;
+    selectionLayer.circle(centre.sx, centre.sy, HIT_RADIUS_PX + 4);
     selectionLayer.stroke({
       width: 1.5,
       color: COLOR_SELECTION_RING,
