@@ -89,6 +89,22 @@ export const INITIAL_ZOOM_PCT = 100;
 /** Hit-test tolerance in screen pixels (Chebyshev radius). */
 export const HIT_RADIUS_PX = 12;
 
+/**
+ * Width of the right-side planet-menu / context panel, in screen
+ * pixels. The starmap canvas still occupies the full viewport, but
+ * visually the *centred* map is shifted left so that stars around
+ * the visual centre aren't hidden behind the panel.
+ * Set to 0 to disable (centring falls back to the canvas centre).
+ */
+export const PANEL_WIDTH_PX = 280;
+
+/**
+ * Gap between the panel and the visually-centred region, in pixels.
+ * Keeps a small breathing space so the selected star isn't glued
+ * against the panel edge.
+ */
+export const PANEL_CENTRE_GAP_PX = 20;
+
 /** Initial camera: centred on the galaxy origin, zoom = 1.0x. */
 export const initialCamera: Camera = {
   pan: { x: 0, y: 0 },
@@ -369,6 +385,143 @@ export function panTo(
       pan: { x: worldPoint.x, y: worldPoint.y },
     },
   };
+}
+
+/**
+ * X-coordinate of the *visual* centre of the map — the point where
+ * a newly-selected star should land. Shifts the canvas centre left
+ * by `(panelWidth + gap) / 2` when the side panel is visible so the
+ * selected star isn't hidden behind the panel. Clamped so the
+ * offset never pushes the visual centre off the canvas entirely.
+ *
+ * Iter 2l — used by planet-menu centring.
+ */
+export function visualCentreX(v: Viewport, panelWidth: number): number {
+  const halfW = v.width / 2;
+  if (panelWidth <= 0) return halfW;
+  const raw = (panelWidth + PANEL_CENTRE_GAP_PX) / 2;
+  const offset = raw > halfW ? halfW : raw;
+  return halfW - offset;
+}
+
+/** Y-coordinate of the visual centre — unchanged by the panel. */
+export function visualCentreY(v: Viewport): number {
+  return v.height / 2;
+}
+
+/** Visual centre of the map as a ScreenPoint. */
+export function visualCentre(
+  v: Viewport,
+  panelWidth: number,
+): { sx: number; sy: number } {
+  return { sx: visualCentreX(v, panelWidth), sy: visualCentreY(v) };
+}
+
+/**
+ * Compute the camera pan that puts `world` at the visual centre
+ * (offset for the panel). Uses the un-truncated scale
+ * `baseScale * zoom` so the integer rounding matches `unprojectPoint`.
+ * The resulting map, after a pixel-granular projection, lands within
+ * a few pixels of the exact visual centre — `selectStarCentred` is
+ * tolerant of this by design.
+ */
+export function panToVisualCentre(
+  state: StarmapState,
+  world: Position,
+  v: Viewport,
+  radius: number,
+  panelWidth: number,
+): StarmapState {
+  const centre = visualCentre(v, panelWidth);
+  const sUntrunc = baseScale(v, radius) * state.camera.zoom;
+  const dx = minDiv((centre.sx - v.width / 2) * ZOOM_DENOMINATOR, sUntrunc);
+  const dy = minDiv((v.height / 2 - centre.sy) * ZOOM_DENOMINATOR, sUntrunc);
+  return {
+    ...state,
+    camera: {
+      ...state.camera,
+      pan: { x: world.x - dx, y: world.y - dy },
+    },
+  };
+}
+
+/**
+ * Select a star and re-centre the camera so it appears at the
+ * visual centre (offset for the panel). Zoom is unchanged. If `id`
+ * is not a known star the state is returned unchanged.
+ *
+ * Iter 2l — used when the player clicks a star so the selection
+ * lands in the part of the canvas not covered by the panel.
+ */
+export function selectStarCentred(
+  state: StarmapState,
+  id: number,
+  g: GalaxySubset,
+  v: Viewport,
+  panelWidth: number,
+): StarmapState {
+  for (const s of g.stars) {
+    if (s.id === id) {
+      const selected = { ...state, selectedId: id };
+      return panToVisualCentre(selected, s.position, v, g.radius, panelWidth);
+    }
+  }
+  return state;
+}
+
+/**
+ * Close the planet menu — clears the selection without touching
+ * the camera. Idempotent on no-selection. Used by the X button in
+ * the planet-menu panel.
+ *
+ * Iter 2l.
+ */
+export function closePlanetMenu(state: StarmapState): StarmapState {
+  return { ...state, selectedId: NO_SELECTION };
+}
+
+/**
+ * Click on empty space. Pans the camera so the world point under
+ * the click ends up at the visual centre (offset for the panel).
+ * NEVER clears the selection — clicking empty space re-centres
+ * without disturbing an open planet menu. If the click is outside
+ * the galaxy disc, the state is returned unchanged.
+ *
+ * Iter 2l — replaces the old "empty click clears selection" bug.
+ */
+export function clickEmpty(
+  state: StarmapState,
+  screenPoint: { sx: number; sy: number },
+  g: GalaxySubset,
+  v: Viewport,
+  panelWidth: number,
+): StarmapState {
+  const world = unprojectPoint(screenPoint, state.camera, v, g.radius);
+  if (!isInsideGalaxy(world, g.radius)) return state;
+  return panToVisualCentre(state, world, v, g.radius, panelWidth);
+}
+
+/**
+ * Top-level click transition used by the starmap canvas click
+ * handler. Hit-a-star selects and centres; hit-empty pans and
+ * keeps the existing selection. There is no transition here that
+ * clears the selection — the panel must be closed explicitly
+ * (closePlanetMenu).
+ *
+ * Iter 2l.
+ */
+export function clickAtPoint(
+  state: StarmapState,
+  screenPoint: { sx: number; sy: number },
+  g: GalaxySubset,
+  v: Viewport,
+  panelWidth: number,
+): StarmapState {
+  const id = starAtPoint(screenPoint, g, state.camera, v);
+  if (id === NO_SELECTION) {
+    return clickEmpty(state, screenPoint, g, v, panelWidth);
+  }
+  return selectStarCentred(state, id, g, v, panelWidth);
 }
 
 /**

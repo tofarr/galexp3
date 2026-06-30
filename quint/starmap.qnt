@@ -19,8 +19,9 @@
 //       starAtPoint(point, galaxy, camera, viewport) -> int
 //         (0 if no star is under the point)
 //   - Pure state transitions:
-//       selectStar, clearSelection,
-//       panCamera, zoomCameraAround
+//       selectStar, clearSelection, closePlanetMenu,
+//       panCamera, zoomCameraAround,
+//       selectStarCentred, clickEmpty, clickAtPoint
 //   - Predicates: isValidCamera, isSelectionValid, isValidState
 //
 // Scope (deliberately excluded):
@@ -131,6 +132,19 @@ module starmap {
   /// Hit-test tolerance, in screen pixels. A click within this Chebyshev
   /// radius of a star's screen position selects it.
   pure val HIT_RADIUS_PX: int = 10
+
+  /// Width of the right-side planet menu / context panel, in screen
+  /// pixels. The starmap canvas still occupies the full viewport,
+  /// but visually the *centred* map is shifted left so that stars
+  /// around the visual centre aren't hidden behind the panel.
+  /// Set to 0 to disable (centring uses the canvas centre).
+  pure val PANEL_WIDTH_PX: int = 280
+
+  /// Gap between the panel and the visually-centred region, in
+  /// pixels. Keeps a small breathing space so the ring isn't glued
+  /// to the panel edge. Combined with PANEL_WIDTH_PX to compute the
+  /// horizontal centre offset from the canvas centre.
+  pure val PANEL_CENTRE_GAP_PX: int = 20
 
   /// Initial camera: centred on the galaxy origin, zoom = 1.0x.
   pure val initialCamera: Camera =
@@ -247,6 +261,11 @@ module starmap {
     isValidCamera(state.camera)
     and isSelectionValid(state.selectedId, g)
 
+  /// True iff a world point lies inside (or on the boundary of) the
+  /// galaxy disc of the given radius. Mirrors the TS `isInsideGalaxy`.
+  pure def isInsideGalaxy(world: Position, radius: int): bool =
+    world.x * world.x + world.y * world.y <= radius * radius
+
   // ---------------------------------------------------------------------------
   // State transitions
   // ---------------------------------------------------------------------------
@@ -302,6 +321,105 @@ module starmap {
     { ...state, camera: { pan: { x: newPanX, y: newPanY }, zoom: newZ } }
 
   // ---------------------------------------------------------------------------
+  // Planet menu / selection transitions (Iter 2l)
+  // ---------------------------------------------------------------------------
+
+  /// X-coordinate of the *visual* centre of the map, accounting for
+  /// the right-side planet menu panel. Stars around this point will
+  /// not be hidden behind the panel.
+  ///
+  /// When PANEL_WIDTH_PX is 0 (no panel), this is just the canvas
+  /// centre. With the default 280 px panel and a 20 px gap, the
+  /// visual centre shifts left by (280 + 20) / 2 = 150 px.
+  ///
+  /// The visual-centre offset is clamped so it never exceeds the
+  /// canvas width: at very narrow viewports the panel would
+  /// otherwise push the visual centre outside the canvas.
+  pure def visualCentreX(v: Viewport, panelWidth: int): int =
+    val halfW = v.width / 2
+    // When there is no panel, the visual centre is the canvas centre.
+    // With a panel, shift left by (panelWidth + gap) / 2 so the
+    // selected star isn't glued against the panel edge. The offset
+    // is clamped so a giant panel doesn't push the visual centre
+    // off the canvas entirely.
+    val offset = if (panelWidth <= 0) 0
+                 else
+                   val raw = minDiv(panelWidth + PANEL_CENTRE_GAP_PX, 2)
+                   if (raw > halfW) halfW else raw
+    halfW - offset
+
+  /// Y-coordinate of the visual centre — unchanged by the panel
+  /// (panel is on the right edge, vertical centring is unaffected).
+  pure def visualCentreY(v: Viewport): int = v.height / 2
+
+  /// Visual centre of the map (i.e. where the selected star should
+  /// land after centring).
+  pure def visualCentre(v: Viewport, panelWidth: int): ScreenPoint =
+    { sx: visualCentreX(v, panelWidth), sy: visualCentreY(v) }
+
+  /// Compute the camera pan that puts a given world point at the
+  /// visual centre. This is the inverse of `projectStar` for the
+  /// visual-centre screen point.
+  ///
+  /// Note: uses the un-truncated world scale (baseScale * zoomPct) to
+  /// mirror unprojectPoint's integer-rounding behaviour.
+  pure def panToVisualCentre(state: StarmapState, world: Position, v: Viewport, radius: int, panelWidth: int): StarmapState =
+    val centre = visualCentre(v, panelWidth)
+    val s_untrunc = baseScale(v, radius) * state.camera.zoom
+    val dx = minDiv((centre.sx - v.width / 2) * ZOOM_DENOMINATOR, s_untrunc)
+    val dy = minDiv((v.height / 2 - centre.sy) * ZOOM_DENOMINATOR, s_untrunc)
+    { ...state, camera: { ...state.camera,
+      pan: { x: world.x - dx, y: world.y - dy } } }
+
+  /// Select a star and re-centre the camera so the star appears at
+  /// the visual centre (offset for the panel). The zoom is unchanged.
+  /// Returns the input state unchanged if `id` is not a valid star.
+  pure def selectStarCentred(state: StarmapState, id: int, g: GalaxySubset, v: Viewport, panelWidth: int): StarmapState =
+    if (not(g.stars.exists(s => s.id == id)))
+      state
+    else
+      // The `exists` check guarantees a match; fold to pull one out
+      // (any element with the matching id works — by galaxy invariant
+      // ids are unique, so the fold picks that one).
+      val target = g.stars.fold(
+        { id: -1, color: White, size: 0, position: { x: 0, y: 0 } },
+        (acc, s) => if (s.id == id) s else acc)
+      val selected = { ...state, selectedId: id }
+      panToVisualCentre(selected, target.position, v, g.radius, panelWidth)
+
+  /// Close the planet menu — clears the current selection without
+  /// touching the camera. Idempotent: calling on no-selection is a
+  /// no-op (same state).
+  pure def closePlanetMenu(state: StarmapState): StarmapState =
+    { ...state, selectedId: NO_SELECTION }
+
+  /// Click on empty space (no star under the cursor). Pans the
+  /// camera so the world point under the click ends up at the
+  /// visual centre. NEVER clears the selection — clicking empty
+  /// space re-centres without disturbing the open planet menu.
+  /// Returns the input state unchanged if the click lies outside
+  /// the galaxy disc (clicks off the disc are no-ops).
+  pure def clickEmpty(state: StarmapState, screenPoint: ScreenPoint, g: GalaxySubset, v: Viewport, panelWidth: int): StarmapState =
+    val world = unprojectPoint(screenPoint, state.camera, v, g.radius)
+    if (not(isInsideGalaxy(world, g.radius)))
+      state
+    else
+      panToVisualCentre(state, world, v, g.radius, panelWidth)
+
+  /// Top-level click transition used by the starmap canvas click
+  /// handler. If the click hits a star, selects it (and centres);
+  /// if it hits empty space, pans to the click point and KEEPS the
+  /// existing selection. There is no transition that clears the
+  /// selection on an in-game click — the panel must be closed
+  /// explicitly (closePlanetMenu).
+  pure def clickAtPoint(state: StarmapState, screenPoint: ScreenPoint, g: GalaxySubset, v: Viewport, panelWidth: int): StarmapState =
+    val id = starAtPoint(screenPoint, g, state.camera, v)
+    if (id == NO_SELECTION)
+      clickEmpty(state, screenPoint, g, v, panelWidth)
+    else
+      selectStarCentred(state, id, g, v, panelWidth)
+
+  // ---------------------------------------------------------------------------
   // Static sanity checks
   // ---------------------------------------------------------------------------
 
@@ -335,4 +453,149 @@ module starmap {
     val s0 = initialState
     val s1 = zoomCameraAround(s0, 1, { sx: 100, sy: 100 }, { width: 800, height: 600 }, 70)
     s1.camera.zoom == MIN_ZOOM_PCT
+
+  // ---------------------------------------------------------------------------
+  // Planet menu / selection sanity checks (Iter 2l)
+  // ---------------------------------------------------------------------------
+
+  /// PANEL_WIDTH_PX is positive (panel is visible) and bounded.
+  run panelWidthSane =
+    PANEL_WIDTH_PX > 0 and PANEL_WIDTH_PX < 1000
+
+  /// visualCentreX shifts the centre LEFT by (panelWidth + gap) / 2
+  /// — i.e. smaller than v.width / 2.
+  run visualCentreXIsLeftOfCanvasCentre =
+    val v = { width: 800, height: 600 }
+    visualCentreX(v, PANEL_WIDTH_PX) < v.width / 2
+
+  /// visualCentreX is always non-negative (the offset is clamped).
+  run visualCentreXNonNegative =
+    val v = { width: 800, height: 600 }
+    visualCentreX(v, PANEL_WIDTH_PX) >= 0
+
+  /// visualCentreX at panelWidth = 0 equals the canvas centre.
+  run visualCentreXNoPanel =
+    val v = { width: 800, height: 600 }
+    visualCentreX(v, 0) == v.width / 2
+
+  /// visualCentreY is always the canvas vertical centre.
+  run visualCentreYAlways =
+    val v = { width: 800, height: 600 }
+    visualCentreY(v) == v.height / 2
+
+  /// closePlanetMenu clears the selection but preserves the camera.
+  run closePlanetMenuClearsSelection =
+    val g = { radius: 70, stars: Set({ id: 1, color: White, size: 5, position: { x: 0, y: 0 } }) }
+    val s0 = { camera: { pan: { x: 5, y: -3 }, zoom: 150 }, selectedId: 1 }
+    val s1 = closePlanetMenu(s0)
+    s1.selectedId == NO_SELECTION
+    and s1.camera.pan.x == 5
+    and s1.camera.pan.y == -3
+    and s1.camera.zoom == 150
+
+  /// closePlanetMenu is idempotent on no-selection.
+  run closePlanetMenuIdempotent =
+    val s0 = initialState
+    val s1 = closePlanetMenu(s0)
+    s1 == s0
+
+  /// selectStarCentred updates the selection AND the camera pan so
+  /// the chosen star lands at the visual centre (offset for the
+  /// panel). The exact pan is `world - dx` where
+  /// `dx = (visualCentre - canvasCentre) * ZOOM_DENOMINATOR / s_untrunc`
+  /// — we assert on `camera.pan` directly to side-step the
+  /// integer-rounding offset that projectStar would re-introduce
+  /// (≈ 2 px here).
+  run selectStarCentredMovesCamera =
+    val v = { width: 800, height: 600 }
+    val g = { radius: 70, stars: Set({ id: 1, color: White, size: 5, position: { x: 0, y: 0 } }) }
+    val s0 = initialState
+    val s1 = selectStarCentred(s0, 1, g, v, PANEL_WIDTH_PX)
+    s1.selectedId == 1
+    and s1.camera.zoom == INITIAL_ZOOM_PCT  // zoom unchanged
+    // visualCentreX(800, 280) = 250; s_untrunc = base(4) * 100 = 400;
+    // dx = (250 - 400) * 100 / 400 = -37 (truncated);
+    // pan.x = world.x - dx = 0 - (-37) = 37.
+    and s1.camera.pan.x == 37
+    and s1.camera.pan.y == 0
+
+  /// selectStarCentred with an unknown id leaves the state unchanged.
+  run selectStarCentredUnknownNoop =
+    val v = { width: 800, height: 600 }
+    val g = { radius: 70, stars: Set({ id: 1, color: White, size: 5, position: { x: 10, y: -5 } }) }
+    val s0 = initialState
+    val s1 = selectStarCentred(s0, 999, g, v, PANEL_WIDTH_PX)
+    s1 == s0
+
+  /// clickEmpty pans so the world point under the click ends up at
+  /// the visual centre, but NEVER clears the existing selection.
+  /// We assert on the resulting camera pan directly (the camera
+  /// pan after clickEmpty should be the same as calling
+  /// panToVisualCentre with the world point under the click).
+  run clickEmptyPreservesSelection =
+    val v = { width: 800, height: 600 }
+    val g = { radius: 70, stars: Set({ id: 1, color: White, size: 5, position: { x: 0, y: 0 } }) }
+    // Start with a selection visible, pan around (selection = star 1).
+    val s0 = { camera: { pan: { x: 5, y: 5 }, zoom: 100 }, selectedId: 1 }
+    // The world point under the canvas centre, under s0:
+    // with pan = (5, 5), the camera centre is galaxy (5, 5).
+    val click = { sx: v.width / 2, sy: v.height / 2 }
+    val s1 = clickEmpty(s0, click, g, v, PANEL_WIDTH_PX)
+    s1.selectedId == 1  // selection preserved across empty click
+    // After: pan.x = clickWorld.x - dx; clickWorld = (5, 5);
+    // dx = (visualCentreX - v.width/2)*100/s_untrunc = -15000/400 = -37;
+    // pan.x = 5 - (-37) = 42. pan.y unchanged at 5.
+    and s1.camera.pan.x == 42
+    and s1.camera.pan.y == 5
+
+  /// clickEmpty on a point outside the disc is a no-op.
+  run clickEmptyOutsideDiscNoop =
+    val v = { width: 800, height: 600 }
+    val g = { radius: 70, stars: Set({ id: 1, color: White, size: 5, position: { x: 0, y: 0 } }) }
+    val s0 = initialState
+    // A click at the canvas top-left corner, well outside the disc.
+    val click = { sx: 5, sy: 5 }
+    val s1 = clickEmpty(s0, click, g, v, PANEL_WIDTH_PX)
+    s1 == s0
+
+  /// clickAtPoint dispatches to selectStarCentred when a star is hit.
+  run clickAtPointOnStarSelects =
+    val v = { width: 800, height: 600 }
+    val g = { radius: 70, stars: Set({ id: 1, color: White, size: 5, position: { x: 0, y: 0 } }) }
+    val star1 = g.stars.fold({ id: -1, color: White, size: 0, position: { x: 0, y: 0 } }, (acc, s) => s)
+    val s0 = initialState
+    // Click at the projected position of the star.
+    val starScreen = projectStar(star1, s0.camera, v, g.radius)
+    val s1 = clickAtPoint(s0, starScreen, g, v, PANEL_WIDTH_PX)
+    s1.selectedId == 1
+
+  /// clickAtPoint on empty space preserves the selection (regression
+  /// for the Iter 2l bug: empty clicks must NOT clear selection).
+  run clickAtPointEmptyPreservesSelection =
+    val v = { width: 800, height: 600 }
+    val g = { radius: 70, stars: Set({ id: 1, color: White, size: 5, position: { x: 0, y: 0 } }) }
+    val s0 = { camera: initialCamera, selectedId: 1 }
+    // Click somewhere far from the star (which is at the centre).
+    val s1 = clickAtPoint(s0, { sx: 1, sy: 1 }, g, v, PANEL_WIDTH_PX)
+    s1.selectedId == 1
+
+  /// Switching between selections via clickAtPoint updates the
+  /// selection (not just keeps the old one).
+  run clickAtPointSwitchesSelection =
+    val v = { width: 800, height: 600 }
+    val g = { radius: 70, stars: Set(
+      { id: 1, color: White, size: 5, position: { x: -20, y: 0 } },
+      { id: 2, color: Yellow, size: 5, position: { x: 20, y: 0 } },
+    )}
+    // Select star 1 first, recentre camera.
+    val s0 = selectStarCentred(initialState, 1, g, v, PANEL_WIDTH_PX)
+    // Now click star 2 (project it under the current camera to get
+    // an on-screen click). Pull star 2 out via fold since Set has
+    // no indexing.
+    val star2 = g.stars.fold(
+      { id: -1, color: White, size: 0, position: { x: 0, y: 0 } },
+      (acc, s) => if (s.id == 2) s else acc)
+    val star2Screen = projectStar(star2, s0.camera, v, g.radius)
+    val s1 = clickAtPoint(s0, star2Screen, g, v, PANEL_WIDTH_PX)
+    s1.selectedId == 2
 }

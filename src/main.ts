@@ -42,11 +42,12 @@ import {
 import {
   ZOOM_DENOMINATOR,
   clearSelection,
+  clickAtPoint,
+  closePlanetMenu,
   initialState as initialStarmap,
-  isInsideGalaxy,
   isValidState,
   NO_SELECTION,
-  selectStar,
+  PANEL_WIDTH_PX,
   starAtPoint,
   type StarmapState,
   type Camera,
@@ -212,7 +213,15 @@ async function ensureStarmap(galaxy: Galaxy): Promise<void> {
   // Always mount on first call (runtime is null).
   if (!runtime) {
     const renderer = await mountStarmap(starmapCanvas, galaxy, initialStarmap);
-    const sidePanel = mountSidePanel(sidepanelHost);
+    const sidePanel = mountSidePanel(sidepanelHost, {
+      // Iter 2l — the X button owns the close transition. The panel
+      // is presentational; the host (us) clears the selection via
+      // `closePlanetMenu`, which then drives applyState → sidePanel.clear().
+      onClose: () => {
+        if (!runtime) return;
+        applyState(closePlanetMenu(runtime.state));
+      },
+    });
     runtime = { galaxy, state: initialStarmap, renderer, sidePanel };
     attachStarmapEvents();
     return;
@@ -259,24 +268,37 @@ function attachStarmapEvents(): void {
       renderer.viewport,
     );
     starmapStatus.textContent = id === NO_SELECTION ? '—' : `#${id}`;
-    if (id === NO_SELECTION) {
-      applyState(clearSelection(runtime.state));
-    } else {
-      applyState(selectStar(runtime.state, id, runtime.galaxy));
-    }
-    // Click-to-recenter: if the click lies inside the galaxy disc AND
-    // no star was selected by the click, animate the camera so the
-    // world point under the cursor ends up at the screen centre.
-    // Star selections keep the camera put so the user can inspect
-    // without the view jumping around.
-    if (id === NO_SELECTION) {
-      const worldPoint = renderer.worldPointFromClient(
-        ev.clientX,
-        ev.clientY,
-      );
-      if (isInsideGalaxy(worldPoint, runtime.galaxy.radius)) {
+
+    // Iter 2l — click semantics (handled by the sim's `clickAtPoint`):
+    //   • Hit a star    → selectStarCentred (selects + recentres
+    //                     for the panel width)
+    //   • Hit empty     → clickEmpty (pans to the click point, keeps
+    //                     the current selection — does NOT clear it)
+    // There is no in-canvas transition that clears the selection;
+    // the panel is closed only via the X button (→ closePlanetMenu).
+    const next = clickAtPoint(
+      runtime.state,
+      sp,
+      runtime.galaxy,
+      renderer.viewport,
+      PANEL_WIDTH_PX,
+    );
+    if (next !== runtime.state) {
+      // Camera moved (new or different selection, or empty pan).
+      // Animate to the new camera via the renderer so the transition
+      // is smooth. For star selections the camera target is the
+      // star itself (already in `next.camera.pan`); for empty clicks
+      // it's the world point under the cursor.
+      const cameraMoved = next.camera.pan.x !== runtime.state.camera.pan.x
+        || next.camera.pan.y !== runtime.state.camera.pan.y
+        || next.camera.zoom !== runtime.state.camera.zoom;
+      applyState(next);
+      if (cameraMoved) {
+        const targetPan = id === NO_SELECTION
+          ? renderer.worldPointFromClient(ev.clientX, ev.clientY)
+          : { x: next.camera.pan.x, y: next.camera.pan.y };
         renderer
-          .panTo(worldPoint, ZOOM_ANIMATION_MS)
+          .panTo(targetPan, ZOOM_ANIMATION_MS)
           .then((finalCamera) => {
             if (!runtime) return;
             runtime.state = { ...runtime.state, camera: finalCamera };
@@ -286,6 +308,8 @@ function attachStarmapEvents(): void {
           });
       }
     }
+    // else: click was on empty space outside the galaxy disc — neither
+    // selection nor camera changed; nothing to do.
   });
 
   zoomInBtn.addEventListener('click', () => {

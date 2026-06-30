@@ -29,6 +29,10 @@ const STAR_NAME_ID = 'sidepanel-star-name';
  * Inject the minimum CSS needed for the panel. We keep it in a
  * <style> tag so the panel is self-contained; the page CSS already
  * provides the colour palette via CSS variables.
+ *
+ * Iter 2l — adds the close-button styles and layout. The button
+ * floats top-right of the panel and uses the same colour palette
+ * as the rest of the UI.
  */
 function injectStyles(): void {
   if (document.getElementById('sidepanel-styles')) return;
@@ -57,11 +61,44 @@ function injectStyles(): void {
     .${PANEL_CLASS}.${PANEL_VISIBLE_CLASS} { pointer-events: auto; }
     .${PANEL_CLASS}.${PANEL_OPEN_CLASS} { transform: translateX(0); }
 
+    .sidepanel-header-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
     .sidepanel-header {
       font-size: 11px;
       letter-spacing: 0.12em;
       text-transform: uppercase;
       color: var(--muted);
+      padding-top: 4px;
+    }
+    .sidepanel-close {
+      flex-shrink: 0;
+      width: 28px;
+      height: 28px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--muted);
+      font-size: 18px;
+      line-height: 1;
+      cursor: pointer;
+      border-radius: 4px;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+    }
+    .sidepanel-close:hover {
+      color: var(--fg);
+      border-color: var(--fg);
+      background: rgba(255, 255, 255, 0.04);
+    }
+    .sidepanel-close:focus {
+      outline: 2px solid var(--accent, #6cf);
+      outline-offset: 1px;
     }
     .sidepanel-star-name {
       font-size: 22px;
@@ -89,6 +126,16 @@ function injectStyles(): void {
 // Public API
 // ---------------------------------------------------------------------------
 
+export interface SidePanelOptions {
+  /**
+   * Called when the user dismisses the panel via the X button.
+   * Iter 2l — the panel is purely presentational; the host owns
+   * the selection state and must react to the close request by
+   * clearing the selection (via `closePlanetMenu`).
+   */
+  onClose?: () => void;
+}
+
 export interface SidePanel {
   /** Show the panel populated for the selected star. */
   showStar(id: number, galaxy: GalaxySubset): void;
@@ -103,8 +150,15 @@ export interface SidePanel {
  * positioned so that absolute positioning of the panel anchors
  * correctly (typically the same container that holds the starmap
  * PixiJS canvas, with `position: relative`).
+ *
+ * Iter 2l — accepts an `onClose` callback fired when the user
+ * clicks the X button. The panel itself never mutates selection
+ * state; the host owns it and must clear it on close.
  */
-export function mountSidePanel(container: HTMLElement): SidePanel {
+export function mountSidePanel(
+  container: HTMLElement,
+  options: SidePanelOptions = {},
+): SidePanel {
   injectStyles();
 
   const panel = document.createElement('aside');
@@ -112,9 +166,29 @@ export function mountSidePanel(container: HTMLElement): SidePanel {
   panel.setAttribute('aria-label', 'Selection details');
   panel.setAttribute('role', 'complementary');
 
+  const headerRow = document.createElement('div');
+  headerRow.className = 'sidepanel-header-row';
+
   const header = document.createElement('div');
   header.className = 'sidepanel-header';
   header.textContent = 'Selection';
+
+  const closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.className = 'sidepanel-close';
+  closeBtn.setAttribute('aria-label', 'Close panel');
+  closeBtn.title = 'Close planet menu';
+  closeBtn.textContent = '\u00D7'; // × multiplication sign
+  closeBtn.addEventListener('click', () => {
+    // The panel is purely a view of the selection; we just fire the
+    // callback so the host can run closePlanetMenu. The host's
+    // state-update will then call back into clear() to animate the
+    // panel out.
+    options.onClose?.();
+  });
+
+  headerRow.appendChild(header);
+  headerRow.appendChild(closeBtn);
 
   const nameEl = document.createElement('div');
   nameEl.id = STAR_NAME_ID;
@@ -127,9 +201,9 @@ export function mountSidePanel(container: HTMLElement): SidePanel {
 
   const footer = document.createElement('div');
   footer.className = 'sidepanel-footer';
-  footer.textContent = 'Iteration 1b — selection panel';
+  footer.textContent = 'Iteration 2l — planet menu';
 
-  panel.appendChild(header);
+  panel.appendChild(headerRow);
   panel.appendChild(nameEl);
   panel.appendChild(empty);
   panel.appendChild(footer);

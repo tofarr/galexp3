@@ -10,14 +10,20 @@ import * as fc from 'fast-check';
 import { RADIUS_FOR_SIZE, GALAXY_SIZES, initGalaxy, type GalaxySize, type Star } from './galaxy';
 import {
   HIT_RADIUS_PX,
+  INITIAL_ZOOM_PCT,
   MAX_ZOOM_PCT,
   MIN_ZOOM_PCT,
   NO_SELECTION,
+  PANEL_CENTRE_GAP_PX,
+  PANEL_WIDTH_PX,
   STARMAP_TEST_VALUES,
   ZOOM_DENOMINATOR,
   baseScale,
   clearSelection,
   clampZoom,
+  clickAtPoint,
+  clickEmpty,
+  closePlanetMenu,
   initialCamera,
   initialState,
   isInsideGalaxy,
@@ -28,11 +34,16 @@ import {
   isValidZoom,
   panCamera,
   panTo,
+  panToVisualCentre,
   projectOrigin,
   projectStar,
   selectStar,
+  selectStarCentred,
   starAtPoint,
   unprojectPoint,
+  visualCentre,
+  visualCentreX,
+  visualCentreY,
   worldScale,
   zoomCameraAround,
   type Camera,
@@ -931,3 +942,333 @@ describe('starmap — galaxy regeneration produces fresh star data', () => {
 
 // (No additional exports: this file is a test consumer, not a
 // producer of reusable test helpers.)
+
+// ---------------------------------------------------------------------------
+// Planet menu / selection (Iter 2l)
+// ---------------------------------------------------------------------------
+
+// Local fixtures use a typed-as-Star helper so the readonly color
+// literal union isn't widened to `string` by array inference.
+const colorLit = (c: 'White' | 'Yellow' | 'Red' | 'Orange' | 'Green' | 'Purple') => c;
+
+describe('starmap — visualCentreX', () => {
+  it('returns the canvas centre when no panel is present', () => {
+    const v: Viewport = { width: 800, height: 600 };
+    expect(visualCentreX(v, 0)).toBe(v.width / 2);
+  });
+
+  it('shifts left of the canvas centre when a panel is present', () => {
+    const v: Viewport = { width: 800, height: 600 };
+    expect(visualCentreX(v, PANEL_WIDTH_PX)).toBeLessThan(v.width / 2);
+  });
+
+  it('offset equals (panelWidth + gap) / 2', () => {
+    const v: Viewport = { width: 800, height: 600 };
+    const halfW = v.width / 2;
+    const expectedOffset = (PANEL_WIDTH_PX + PANEL_CENTRE_GAP_PX) / 2;
+    expect(halfW - visualCentreX(v, PANEL_WIDTH_PX)).toBe(expectedOffset);
+  });
+
+  it('clamps the offset so it never exceeds half the canvas width', () => {
+    const v: Viewport = { width: 100, height: 100 };
+    // Pathological panel: 2000 px wide.
+    expect(visualCentreX(v, 2000)).toBe(0);
+  });
+
+  it('property: no panel ⇒ equals canvas centre', () => {
+    fc.assert(
+      fc.property(viewportArb, (v) => {
+        expect(visualCentreX(v, 0)).toBe(v.width / 2);
+      }),
+    );
+  });
+});
+
+describe('starmap — visualCentreY', () => {
+  it('is always the vertical canvas centre', () => {
+    fc.assert(
+      fc.property(viewportArb, (v) => {
+        expect(visualCentreY(v)).toBe(v.height / 2);
+      }),
+    );
+  });
+});
+
+describe('starmap — visualCentre', () => {
+  it('combines visualCentreX and visualCentreY', () => {
+    const v: Viewport = { width: 800, height: 600 };
+    const c = visualCentre(v, PANEL_WIDTH_PX);
+    expect(c.sx).toBe(visualCentreX(v, PANEL_WIDTH_PX));
+    expect(c.sy).toBe(visualCentreY(v));
+  });
+});
+
+describe('starmap — panToVisualCentre', () => {
+  const v: Viewport = { width: 800, height: 600 };
+  const radius = 70;
+
+  it('preserves zoom', () => {
+    const s = panToVisualCentre(
+      { ...initialState, camera: { pan: { x: 0, y: 0 }, zoom: 250 } },
+      { x: 10, y: 10 },
+      v,
+      radius,
+      PANEL_WIDTH_PX,
+    );
+    expect(s.camera.zoom).toBe(250);
+  });
+
+  it('does not mutate the input state', () => {
+    const before: StarmapState = {
+      camera: { pan: { x: 5, y: 5 }, zoom: 100 },
+      selectedId: NO_SELECTION,
+    };
+    panToVisualCentre(before, { x: 10, y: 10 }, v, radius, PANEL_WIDTH_PX);
+    expect(before.camera.pan).toEqual({ x: 5, y: 5 });
+  });
+
+  it('places the world point near the visual centre after pan', () => {
+    // After the pan, projectStar of the world point should land
+    // within a few pixels of the visual centre (integer rounding).
+    const s = panToVisualCentre(initialState, { x: 7, y: -3 }, v, radius, PANEL_WIDTH_PX);
+    const proj = projectStar(
+      { id: 1, color: 'White', size: 5, position: { x: 7, y: -3 }, name: 'X' },
+      s.camera,
+      v,
+      radius,
+    );
+    expect(Math.abs(proj.sx - visualCentreX(v, PANEL_WIDTH_PX))).toBeLessThanOrEqual(2);
+    expect(Math.abs(proj.sy - visualCentreY(v))).toBeLessThanOrEqual(2);
+  });
+});
+
+describe('starmap — selectStarCentred', () => {
+  const v: Viewport = { width: 800, height: 600 };
+  const g = {
+    radius: 70,
+    stars: [
+      { id: 1, color: colorLit('White'), size: 5, position: { x: 10, y: -5 }, name: 'A' },
+      { id: 2, color: colorLit('Yellow'), size: 5, position: { x: -8, y: 4 }, name: 'B' },
+    ],
+  };
+
+  it('updates the selection', () => {
+    const s = selectStarCentred(initialState, 1, g, v, PANEL_WIDTH_PX);
+    expect(s.selectedId).toBe(1);
+  });
+
+  it('preserves zoom', () => {
+    const s = selectStarCentred(initialState, 1, g, v, PANEL_WIDTH_PX);
+    expect(s.camera.zoom).toBe(initialState.camera.zoom);
+  });
+
+  it('re-centres the camera so the chosen star lands near the visual centre', () => {
+    const target = g.stars[0]!;
+    const s = selectStarCentred(initialState, 1, g, v, PANEL_WIDTH_PX);
+    const proj = projectStar(
+      { ...target, color: target.color },
+      s.camera,
+      v,
+      g.radius,
+    );
+    expect(Math.abs(proj.sx - visualCentreX(v, PANEL_WIDTH_PX))).toBeLessThanOrEqual(2);
+    expect(Math.abs(proj.sy - visualCentreY(v))).toBeLessThanOrEqual(2);
+  });
+
+  it('is a no-op for an unknown star id', () => {
+    const s = selectStarCentred(initialState, 999, g, v, PANEL_WIDTH_PX);
+    expect(s).toBe(initialState);
+  });
+
+  it('selects a *different* star than currently selected (switching selection)', () => {
+    // First select star 1, recentring the camera.
+    const s1 = selectStarCentred(initialState, 1, g, v, PANEL_WIDTH_PX);
+    expect(s1.selectedId).toBe(1);
+    // Now switch to star 2 — selection should change to 2 and the
+    // camera should recentre onto star 2.
+    const s2 = selectStarCentred(s1, 2, g, v, PANEL_WIDTH_PX);
+    expect(s2.selectedId).toBe(2);
+  });
+});
+
+describe('starmap — closePlanetMenu', () => {
+  it('clears the selection but preserves the camera', () => {
+    const s = closePlanetMenu({
+      camera: { pan: { x: 5, y: -3 }, zoom: 150 },
+      selectedId: 42,
+    });
+    expect(s.selectedId).toBe(NO_SELECTION);
+    expect(s.camera.pan).toEqual({ x: 5, y: -3 });
+    expect(s.camera.zoom).toBe(150);
+  });
+
+  it('is idempotent on no-selection (returns equivalent state)', () => {
+    const s = closePlanetMenu(initialState);
+    // We always return a fresh object, but the contents must equal
+    // the input (same camera, same NO_SELECTION id).
+    expect(s).toEqual(initialState);
+    expect(s.selectedId).toBe(NO_SELECTION);
+    expect(s.camera).toEqual(initialState.camera);
+  });
+});
+
+describe('starmap — clickEmpty (Iter 2l fix)', () => {
+  const v: Viewport = { width: 800, height: 600 };
+  const g = {
+    radius: 70,
+    stars: [
+      { id: 1, color: colorLit('White'), size: 5, position: { x: 0, y: 0 }, name: 'A' },
+    ],
+  };
+
+  it('PRESERVES an existing selection (regression for the bug)', () => {
+    const s0: StarmapState = {
+      camera: initialCamera,
+      selectedId: 1,
+    };
+    const s1 = clickEmpty(s0, { sx: 200, sy: 200 }, g, v, PANEL_WIDTH_PX);
+    expect(s1.selectedId).toBe(1);
+  });
+
+  it('re-centres the camera to the world point under the click', () => {
+    const s0: StarmapState = {
+      camera: { pan: { x: 0, y: 0 }, zoom: 100 },
+      selectedId: NO_SELECTION,
+    };
+    const s1 = clickEmpty(s0, { sx: v.width / 2, sy: v.height / 2 }, g, v, PANEL_WIDTH_PX);
+    // The world point under canvas centre is (0, 0); after the click,
+    // the camera should be panned so (0, 0) is near the visual centre.
+    const proj = projectStar(
+      { id: 1, color: colorLit('White'), size: 5, position: { x: 0, y: 0 }, name: 'A' },
+      s1.camera,
+      v,
+      g.radius,
+    );
+    expect(Math.abs(proj.sx - visualCentreX(v, PANEL_WIDTH_PX))).toBeLessThanOrEqual(2);
+    expect(Math.abs(proj.sy - visualCentreY(v))).toBeLessThanOrEqual(2);
+  });
+
+  it('is a no-op for a click outside the galaxy disc', () => {
+    const s0: StarmapState = {
+      camera: { pan: { x: 5, y: 5 }, zoom: 100 },
+      selectedId: NO_SELECTION,
+    };
+    // Click well outside the disc (radius = 70 galaxy units).
+    const s1 = clickEmpty(s0, { sx: 1, sy: 1 }, g, v, PANEL_WIDTH_PX);
+    expect(s1).toBe(s0);
+  });
+
+  it('preserves both the selection AND the camera when outside the disc', () => {
+    const s0: StarmapState = {
+      camera: { pan: { x: 5, y: 5 }, zoom: 100 },
+      selectedId: 1,
+    };
+    const s1 = clickEmpty(s0, { sx: 1, sy: 1 }, g, v, PANEL_WIDTH_PX);
+    expect(s1.selectedId).toBe(1);
+    expect(s1.camera.pan).toEqual({ x: 5, y: 5 });
+  });
+});
+
+describe('starmap — clickAtPoint (Iter 2l fix)', () => {
+  const v: Viewport = { width: 800, height: 600 };
+  const g = {
+    radius: 70,
+    stars: [
+      { id: 1, color: colorLit('White'), size: 5, position: { x: 0, y: 0 }, name: 'A' },
+      { id: 2, color: colorLit('Yellow'), size: 5, position: { x: -20, y: 0 }, name: 'B' },
+      { id: 3, color: colorLit('Red'), size: 5, position: { x: 20, y: 0 }, name: 'C' },
+    ],
+  };
+
+  it('selects+re-centres when a click hits a star', () => {
+    const s0 = initialState;
+    // project star 1 from initialState to find on-screen click.
+    const starScreen = projectStar(
+      g.stars[0]!,
+      s0.camera,
+      v,
+      g.radius,
+    );
+    const s1 = clickAtPoint(s0, starScreen, g, v, PANEL_WIDTH_PX);
+    expect(s1.selectedId).toBe(1);
+  });
+
+  it('does NOT clear the selection when clicking empty space (regression)', () => {
+    const s0: StarmapState = {
+      camera: initialCamera,
+      selectedId: 1,
+    };
+    // Click far from any star.
+    const s1 = clickAtPoint(s0, { sx: 1, sy: 1 }, g, v, PANEL_WIDTH_PX);
+    expect(s1.selectedId).toBe(1);
+  });
+
+  it('switches selection when clicking a *different* star', () => {
+    const s0 = selectStarCentred(initialState, 1, g, v, PANEL_WIDTH_PX);
+    expect(s0.selectedId).toBe(1);
+    // Find the new on-screen position of star 2 under s0.
+    const star2 = g.stars[1]!;
+    const star2Screen = projectStar(
+      { ...star2, color: star2.color },
+      s0.camera,
+      v,
+      g.radius,
+    );
+    const s1 = clickAtPoint(s0, star2Screen, g, v, PANEL_WIDTH_PX);
+    expect(s1.selectedId).toBe(2);
+  });
+
+  it('property: empty click never changes selectedId', () => {
+    fc.assert(
+      fc.property(fc.integer({ min: 1, max: 3 }), (selId) => {
+        const s0: StarmapState = {
+          camera: initialCamera,
+          selectedId: selId,
+        };
+        // Click far from every star (centre of disc is occupied by
+        // star 1, so pick a corner — outside the disc).
+        const s1 = clickAtPoint(s0, { sx: 1, sy: 1 }, g, v, PANEL_WIDTH_PX);
+        expect(s1.selectedId).toBe(selId);
+      }),
+    );
+  });
+});
+
+describe('starmap — Quint <-> TS parity for new transitions', () => {
+  const v: Viewport = { width: 800, height: 600 };
+  const radius = 70;
+  const g = {
+    radius,
+    stars: [
+      { id: 1, color: colorLit('White'), size: 5, position: { x: 0, y: 0 }, name: 'A' },
+      { id: 2, color: colorLit('Yellow'), size: 5, position: { x: 10, y: -5 }, name: 'B' },
+    ],
+  };
+
+  it('selectStarCentred: camera.pan matches the spec formula', () => {
+    // spec: dx = (visualCentreX - v.width/2) * ZOOM_DENOMINATOR / (baseScale * zoom)
+    //       pan.x = world.x - dx; pan.y = world.y - dy
+    const halfW = v.width / 2;
+    const expectedCentre = halfW - (PANEL_WIDTH_PX + PANEL_CENTRE_GAP_PX) / 2;
+    const zoom = INITIAL_ZOOM_PCT;
+    const sUntrunc = baseScale(v, radius) * zoom;
+    const dx = Math.trunc((expectedCentre - halfW) * ZOOM_DENOMINATOR / sUntrunc);
+    const s = selectStarCentred(initialState, 1, g, v, PANEL_WIDTH_PX);
+    // star 1 is at (0, 0): pan.x = 0 - dx
+    expect(s.camera.pan.x).toBe(-dx);
+    expect(s.camera.pan.y).toBe(0);
+  });
+
+  it('clickEmpty: preserves selection (mirrors quint clickEmptyPreservesSelection)', () => {
+    const s0: StarmapState = {
+      camera: { pan: { x: 5, y: 5 }, zoom: 100 },
+      selectedId: 1,
+    };
+    const s1 = clickEmpty(s0, { sx: v.width / 2, sy: v.height / 2 }, g, v, PANEL_WIDTH_PX);
+    expect(s1.selectedId).toBe(1);
+    // spec yields pan.x = 42 for this fixture (canvas centre click on
+    // pan=(5,5)): match the quint computation.
+    expect(s1.camera.pan.x).toBe(42);
+    expect(s1.camera.pan.y).toBe(5);
+  });
+});
