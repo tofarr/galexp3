@@ -389,13 +389,12 @@ describe('initGalaxy — star names', () => {
     );
   });
 
-  it('names look sci-fi: "<Capitalised word> <Capitalised word>"', () => {
-    // Pattern intentionally loose — both words start with an
-    // uppercase letter, contain only ASCII letters, and the whole
-    // name has exactly one separating space. This catches obvious
-    // regressions (empty name, garbage chars, leading/trailing
-    // spaces, multi-word suffixes, etc.).
-    const name = /^[A-Z][a-zA-Z]+ [A-Z][a-zA-Z]+$/;
+  it('names look sci-fi: "<Capitalised word>"', () => {
+    // Single-word name, capitalised, ASCII letters only. Catches
+    // obvious regressions (empty name, garbage chars, leading/
+    // trailing spaces, multi-word names, disambiguator suffixes
+    // leaking through, etc.).
+    const name = /^[A-Z][a-zA-Z]+$/;
     fc.assert(
       fc.property(sizeArb, seedArb, (size, seed) => {
         const g = initGalaxy(seed, size);
@@ -429,14 +428,14 @@ describe('initGalaxy — star names', () => {
     expect(isValidGalaxy(broken)).toBe(false);
   });
 
-  it('uses varied prefixes — not "10 Phoenixes in a row"', () => {
-    // Distribution sanity: a galaxy of 24 stars should use far
-    // more than one prefix among its first few names. If all
-    // names shared a prefix, the generator would be draining a
-    // single column of the prefix×suffix grid before moving on.
+  it('uses varied names — not "10 copies of the same word"', () => {
+    // Distribution sanity: a galaxy of 48 stars picked from a pool
+    // of ~600 single-word names should produce many distinct names.
+    // A generator that's draining a single corner of the shuffle
+    // would produce many duplicates.
     const g = initGalaxy(42, 'Large');
-    const prefixes = new Set(g.stars.map((s) => s.name.split(' ')[0]));
-    // 48 stars / 60 prefixes should easily use >10 distinct ones.
-    expect(prefixes.size).toBeGreaterThan(10);
+    const names = new Set(g.stars.map((s) => s.name));
+    // 48 stars should comfortably produce >40 distinct names.
+    expect(names.size).toBeGreaterThan(40);
   });
 });

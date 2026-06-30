@@ -653,3 +653,69 @@ required, not optional:
   wheat-head icons in real-world glyph sets (lucide, heroicons,
   feather) almost always have the stem dead-centre. A leaning
   stem would look like a wilted plant. Kept the stem straight.
+
+
+### Iter 2j — Single-word sci-fi star names
+
+**Scope:**
+- Replaced the two-word `<Prefix> <Suffix>` scheme (e.g. "Vega Prime",
+  "Bellatrix Alpha") with a single-word scheme (e.g. "Vulcan",
+  "Phyco", "Klystron", "Proxima", "Sirius").
+- `src/sim/names.ts` now exports a single `STAR_NAMES: ReadonlyArray<string>`
+  of 600 curated sci-fi words. The two old exports `STAR_NAME_PREFIXES`
+  and `STAR_NAME_SUFFIXES` are gone.
+- `nameStars` simplified: shuffle the pool, walk each star at a random
+  offset into the shuffle. The disambiguator fallback (now appending
+  `"<n>"` to a name rather than `" <n>"`) is unreachable for any
+  in-game galaxy size (Huge = 72 stars, pool = 600) but kept as a
+  safety net.
+- `shuffleInPlace` helper deleted (only `shuffleStable` is used now).
+- `quint/galaxy.qnt` placeholder table renamed: `STAR_NAME_PREFIXES`
+  + `STAR_NAME_SUFFIXES` collapsed into a single `STAR_NAMES` Set,
+  with a representative sample of names for the spec.
+- Test regex updated from `^[A-Z][a-zA-Z]+ [A-Z][a-zA-Z]+$` to
+  `^[A-Z][a-zA-Z]+$` to match the new single-word format.
+- "Varied prefixes" distribution test rewritten as "Varied names"
+  to assert uniqueness (set size > 40 in a 48-star galaxy) rather
+  than prefix diversity.
+
+**Decisions logged:**
+- **600 names, not 400.** With Huge = 72 stars, the pool only needs
+  to be larger than 72. But 400 leaves no headroom for the
+  unexpected — e.g. a future "Inhabited Star Names" feature that
+  picks a name and then formats `(<faction>)` against it — and
+  the per-name overhead is tiny (10 kB total in the bundle). 600
+  is comfortable without being wasteful.
+- **One flat array, not many small categorical arrays.** The old
+  scheme split words into prefix/suffix; the new scheme is one
+  bag of words. Categorising them (e.g. real-stars vs invented)
+  would be a maintenance burden with no observable benefit: the
+  shuffle already gives uniform distribution across the pool.
+- **Pool character-distribution skewed to 5-6 chars.** Of 600
+  names: 17 are 4-char, 198 are 5-char, 308 are 6-char, 38 are
+  7-char, 32 are 8-char, 5 are 9-char, 2 are 10-char. Short
+  names read clearly at every UI size (star labels at 14px,
+  sidepanel star name at 18px) without crowding neighbouring
+  stars at the 14px size.
+- **Quint placeholder is a 23-name subset, not all 600.** The
+  quint spec exists to *name the scheme*, not to enumerate
+  every word. Carrying 600 strings into the spec would inflate
+  it 25x for no semantic gain. The subset contains your seven
+  example words (Vulcan, Alderan, Phyco, Klystron, Sirius,
+  Proxima, plus an extended selection of recognisable names)
+  so any human reading the spec gets the flavour immediately.
+- **"Alderan" not "Aldebaran".** You used *Alderan* (Star Wars).
+  I kept *both* in the TS pool — the SW name and the real
+  star — and the spec lists *Alderan* alongside. Aldebaran is
+  there for astronomical flavour; Alderan is there because
+  you wrote it.
+- **Fallback format `<name><n>` not `<name> <n>`**. The fallback
+  would break the single-word rule if it fired. Concatenated
+  form (`"Vulcan2"`) keeps it single-token and unparseable as
+  multiple words; the fallback fires at the 600+ star mark which
+  is unreachable for in-game galaxies.
+- **Distribution test relaxed.** Old test checked that >10 of 60
+  prefixes appeared (it was a 5x headroom sanity check on a
+  600-name product grid). New test checks that >40 of 48 names
+  are distinct (essentially "no duplicates in a 48-star galaxy").
+  Direct check on the property we actually care about.

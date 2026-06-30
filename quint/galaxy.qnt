@@ -317,24 +317,21 @@ module galaxy {
   // Star naming
   // ---------------------------------------------------------------------------
 
-  /// Pools used to compose a sci-fi star name: `<Prefix> <Suffix>`.
-  /// The TS mirror `src/sim/names.ts` is the source of truth for the
-  /// actual word lists; these quint tables are placeholders kept in
-  /// sync by hand so the spec mentions the naming scheme.
+  /// Pool of single-word sci-fi star names (e.g. "Vulcan",
+  /// "Phyco", "Klystron", "Proxima", "Sirius"). The TS mirror
+  /// `src/sim/names.ts` is the source of truth for the full word
+  /// list (~600 entries); this quint table is a placeholder kept
+  /// in sync by hand so the spec mentions the naming scheme.
   ///
-  /// Suffixes are deliberately a small set so each prefix tends to
-  /// collide with one or two others, forcing the collision-handler
-  /// in `nameStars` to exercise its disambiguator branch.
-  pure val STAR_NAME_PREFIXES: Set[str] = {
-    "Aldebaran", "Vega", "Rigel", "Sirius", "Deneb", "Altair",
-    "Antares", "Polaris", "Castor", "Pollux", "Proxima", "Cygnus",
-    "Lyra", "Hydra", "Orion", "Phoenix", "Andromeda", "Perseus",
-    "Taurus", "Helios", "Astra", "Nova", "Eridanus"
-  }
-
-  pure val STAR_NAME_SUFFIXES: Set[str] = {
-    "Prime", "Major", "Minor", "Secundus", "Tertius", "Alpha",
-    "Beta", "Gamma", "Delta", "Epsilon"
+  /// Single-word names are unique per galaxy. With ~600 names and
+  /// a maximum galaxy size of 72 stars (Huge), the disambiguator
+  /// fallback in `nameStars` never fires in practice — it's a
+  /// safety net only.
+  pure val STAR_NAMES: Set[str] = {
+    "Vulcan", "Alderan", "Phyco", "Klystron", "Sirius", "Proxima",
+    "Rigel", "Vega", "Altair", "Polaris", "Andromeda", "Cygnus",
+    "Antares", "Taurus", "Phoenix", "Tachyon", "Pulsar", "Quasar",
+    "Magnetar", "Helios", "Hyperion", "Perseus", "Achernar"
   }
 
   // ---------------------------------------------------------------------------
