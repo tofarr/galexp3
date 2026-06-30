@@ -8,6 +8,12 @@
  * core → sharp highlight), and added a procedural dusty starfield
  * backdrop.
  *
+ * Iter 2c — replaced the in-game debug header (Galaxy Size / Seed /
+ * Generate / Random seed + star-stat badges + galaxy-JSON pre) with
+ * a five-resource bar (Agriculture / Industry / Research / Culture /
+ * Military) on the left and a Next Turn button on the right. Per
+ * iteration 2a's spec, each ResourcePool is now a 5-tuple.
+ *
  * View routing (in-file state machine):
  *
  *   ┌─────────┐  New Game    ┌─────────┐
@@ -18,6 +24,8 @@
  *      └─────── Back to menu ◀───┘
  *
  * The game view mounts:
+ *   - A resource bar (#resource-bar-host) at the top with the
+ *     five player resources and a Next Turn button.
  *   - A PixiJS starmap renderer in #starmap-canvas.
  *   - A side panel (CSS-driven slide-in) in #sidepanel-host.
  *   - Click handlers on the canvas that hit-test against the
@@ -26,13 +34,10 @@
  */
 
 import {
-  GALAXY_SIZES,
-  GalaxySize,
-  RADIUS_FOR_SIZE,
-  STAR_COUNT_FOR_SIZE,
   initGalaxy,
   isValidGalaxy,
   type Galaxy,
+  type GalaxySize,
 } from '@sim/galaxy';
 import {
   ZOOM_DENOMINATOR,
@@ -50,6 +55,7 @@ import { mountMenuBackground, type MenuBackground } from './ui/menuBackground';
 import { mountStarmap, type StarmapRenderer } from './ui/starmap';
 import { mountSidePanel, type SidePanel } from './ui/sidepanel';
 import { mountNewGameDialog, type NewGameDialog } from './ui/newGameDialog';
+import { mountResourceBar, type ResourceBar, type ResourceKey } from './ui/resourceBar';
 
 type AppView = 'menu' | 'game';
 
@@ -66,14 +72,6 @@ const headerSubtitle = document.getElementById('header-subtitle') as HTMLElement
 const newGameBtn = document.getElementById('new-game-btn') as HTMLButtonElement;
 const loadGameBtn = document.getElementById('load-game-btn') as HTMLButtonElement;
 
-const sizeSelect = document.getElementById('size-select') as HTMLSelectElement;
-const seedInput = document.getElementById('seed-input') as HTMLInputElement;
-const generateBtn = document.getElementById('generate-btn') as HTMLButtonElement;
-const randomSeedBtn = document.getElementById('random-seed-btn') as HTMLButtonElement;
-const statCount = document.getElementById('stat-count')!.querySelector('b')!;
-const statRadius = document.getElementById('stat-radius')!.querySelector('b')!;
-const statValid = document.getElementById('stat-valid')!.querySelector('b')!;
-const jsonOut = document.getElementById('galaxy-json') as HTMLPreElement;
 const statusEl = document.getElementById('status') as HTMLDivElement;
 
 const starmapCanvas = document.getElementById('starmap-canvas') as HTMLElement;
@@ -83,6 +81,8 @@ const zoomOutBtn = document.getElementById('zoom-out-btn') as HTMLButtonElement;
 const clearSelBtn = document.getElementById('clear-selection-btn') as HTMLButtonElement;
 const starmapStatus = document.getElementById('starmap-status')!.querySelector('b')!;
 const newGameDialogHost = document.getElementById('new-game-dialog-host') as HTMLElement;
+const resourceBarHost = document.getElementById('resource-bar-host') as HTMLElement;
+const nextTurnBtnHost = document.getElementById('next-turn-btn-host') as HTMLElement;
 
 /** Duration of camera animation tweens (zoom + recenter). */
 const ZOOM_ANIMATION_MS = 180;
@@ -90,11 +90,10 @@ const ZOOM_ANIMATION_MS = 180;
 const requiredElements = {
   menuView, menuBg, gameView, backLink, headerSubtitle,
   newGameBtn, loadGameBtn,
-  sizeSelect, seedInput, generateBtn, randomSeedBtn,
-  statCount, statRadius, statValid, jsonOut, statusEl,
+  statusEl,
   starmapCanvas, sidepanelHost,
   zoomInBtn, zoomOutBtn, clearSelBtn, starmapStatus,
-  newGameDialogHost,
+  newGameDialogHost, resourceBarHost,
 };
 for (const [name, el] of Object.entries(requiredElements)) {
   if (!el) throw new Error(`main.ts: required DOM element missing: ${name}`);
@@ -140,6 +139,60 @@ interface GameRuntime {
 let runtime: GameRuntime | null = null;
 
 // ---------------------------------------------------------------------------
+// Player state (resource pool, owned by runtime)
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-player state owned by the game view. For now, only the
+ * resource pool is meaningful — there's exactly one player (the
+ * human) and no other game-state entities (colonies, fleets)
+ * exist yet. Field names mirror the canonical spec's ResourcePool
+ * tuple layout (agriculture, industry, academic, culture, military).
+ */
+interface PlayerState {
+  id: number;
+  name: string;
+  isHuman: boolean;
+  resources: Record<ResourceKey, number>;
+  turnNumber: number;
+}
+
+let player: PlayerState | null = null;
+
+function newPlayer(): PlayerState {
+  return {
+    id: 0,
+    name: 'You',
+    isHuman: true,
+    resources: { agriculture: 0, industry: 0, academic: 0, culture: 0, military: 0 },
+    turnNumber: 0,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Resource bar (UI mount)
+// ---------------------------------------------------------------------------
+
+const resourceBar: ResourceBar = mountResourceBar(resourceBarHost, nextTurnBtnHost);
+resourceBar.setNextTurnHandler(() => {
+  if (!player) return;
+  // Placeholder: full turn-resolution lives in a future iteration.
+  // For now we just bump the turn counter and clear the status.
+  player.turnNumber += 1;
+  resourceBar.setNextTurnTooltip(`End turn ${player.turnNumber - 1} → start turn ${player.turnNumber}`);
+  setStatus(`Turn ${player.turnNumber}. (End-of-turn logic not yet implemented.)`, '');
+  console.info(`[galexp3] Next Turn pressed; turn=${player.turnNumber}; resources=`, player.resources);
+});
+
+function refreshResourceBar(): void {
+  if (!player) return;
+  resourceBar.setPool(player.resources);
+  // Tooltip reflects the upcoming turn: the button will END the
+  // current turn and START the next one, so we describe both.
+  resourceBar.setNextTurnTooltip(`End turn ${player.turnNumber} → start turn ${player.turnNumber + 1}`);
+}
+
+// ---------------------------------------------------------------------------
 // New Game dialog
 // ---------------------------------------------------------------------------
 
@@ -153,10 +206,6 @@ newGameDialog.onStart(({ size, seed }) => {
 function setStatus(msg: string, kind: 'ok' | 'err' | '' = ''): void {
   statusEl.textContent = msg;
   statusEl.className = kind;
-}
-
-function isGalaxySize(v: string): v is GalaxySize {
-  return (GALAXY_SIZES as readonly string[]).includes(v);
 }
 
 async function ensureStarmap(galaxy: Galaxy): Promise<void> {
@@ -285,52 +334,21 @@ function attachStarmapEvents(): void {
 // Generation
 // ---------------------------------------------------------------------------
 
-function generateGalaxyInView(): void {
-  const sizeRaw = sizeSelect.value;
-  if (!isGalaxySize(sizeRaw)) {
-    setStatus(`Invalid galaxy size: ${sizeRaw}`, 'err');
-    return;
-  }
-  const seed = Number.parseInt(seedInput.value, 10);
-  if (!Number.isFinite(seed)) {
-    setStatus('Seed must be an integer.', 'err');
-    return;
-  }
-  applyNewGame(sizeRaw, seed);
-}
-
 /**
- * Generate a galaxy from a (size, seed) pair (regardless of where
- * those values came from — the in-game controls or the New Game
- * dialog). The in-game control values are mirrored so they stay
- * in sync with whatever was last chosen.
+ * Generate a galaxy from a (size, seed) pair. Resets the player
+ * state to a fresh human player at turn 0 with an empty resource
+ * pool. The resource bar is refreshed immediately so the player
+ * sees their starting counts (all 0 for now; per-turn production
+ * will fill these in once colonies exist).
  */
 function applyNewGame(size: GalaxySize, seed: number): void {
-  // Mirror the choice into the in-game controls so the user sees
-  // what they started with if they later tweak from the game view.
-  sizeSelect.value = size;
-  seedInput.value = String(seed);
-
   try {
     const galaxy = initGalaxy(seed, size);
     const valid = isValidGalaxy(galaxy);
 
-    statCount.textContent = String(galaxy.stars.length);
-    statRadius.textContent = String(galaxy.radius);
-    statValid.textContent = String(valid);
-
-    const summary = {
-      size: galaxy.size,
-      radius: galaxy.radius,
-      starCount: galaxy.stars.length,
-      expectedCount: STAR_COUNT_FOR_SIZE[size],
-      expectedRadius: RADIUS_FOR_SIZE[size],
-      isValidGalaxy: valid,
-      seed,
-      firstFiveStars: galaxy.stars.slice(0, 5),
-      lastStar: galaxy.stars[galaxy.stars.length - 1],
-    };
-    jsonOut.textContent = JSON.stringify(summary, null, 2);
+    // Reset player state.
+    player = newPlayer();
+    refreshResourceBar();
 
     setStatus(
       valid
@@ -378,9 +396,7 @@ function startNewGame(): void {
 
 function startLoadGame(): void {
   showView('game');
-  sizeSelect.value = 'Large';
-  seedInput.value = '42';
-  generateGalaxyInView();
+  applyNewGame('Large', 42);
   setStatus('Load Game: no saved games yet. Showing demo galaxy.', '');
   console.warn('[galexp3] Load Game pressed — save/load not yet implemented.');
 }
@@ -399,14 +415,6 @@ backLink.addEventListener('click', (e) => {
   e.preventDefault();
   backToMenu();
 });
-
-generateBtn.addEventListener('click', generateGalaxyInView);
-randomSeedBtn.addEventListener('click', () => {
-  seedInput.value = String(Math.floor(Math.random() * 0x7fffffff) | 0);
-  generateGalaxyInView();
-});
-sizeSelect.addEventListener('change', generateGalaxyInView);
-seedInput.addEventListener('change', generateGalaxyInView);
 
 // Initial view: menu (which also kicks off the background mount).
 showView('menu');

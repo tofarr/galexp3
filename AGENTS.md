@@ -427,3 +427,229 @@ required, not optional:
   with the menu — but the JS object lives for the page
   lifetime, which is what we want for re-opening.
 
+
+
+### Iter 2c — Resource bar tooltips + Next Turn tooltip
+
+**Scope:**
+- Resource badge `title` simplified to `{value} {displayName} Points`
+  (icon name removed so the tooltip is purely numerical).
+- Next Turn button now has a dynamic tooltip:
+  `End turn N → start turn N+1` — updated each turn by the host
+  via `setNextTurnTooltip`.
+- New `setNextTurnTooltip(text: string)` method on the returned
+  `ResourceBar` so the host owns the wording.
+
+**Decisions logged:**
+- **Native `title` attribute, not a custom tooltip library**.
+  Each badge already uses the browser-native title; we just
+  changed the string. Avoids ~20 kB for Floating UI / Popper
+  just to show five identical strings.
+- **Arrow character choice**: U+2192 (RIGHTWARDS ARROW, the
+  standard one in tech specs) over `->` (which reads as "from/by")
+  and over → lookalikes. Renders consistently across
+  macOS / Win / Linux.
+- **Compute the next-turn number in the host**, not in the bar.
+  The bar doesn't know the current turn — the host passes a
+  string in. Keeps `mountResourceBar` ignorant of the game
+  state shape (good separation).
+- **Tooltip stays on during the click**: native title has a
+  small visible delay; suppression would be more code than
+  it's worth.
+
+
+### Iter 2d — Move Next Turn button to bottom-right of starmap
+
+**Scope:**
+- Next Turn button is no longer part of the resource bar.
+  It now lives in its own absolutely-positioned host
+  `#next-turn-btn-host` inside the starmap, bottom-right,
+  5px in from the corner — mirroring the zoom controls
+  which sit bottom-left 5px in.
+- `mountResourceBar(host, nextTurnButtonHost?)` signature:
+  if the second arg is supplied, the button is mounted there.
+  If not, behaviour reverts to "in the bar, with a flex
+  spacer to push it right" — backward compatible.
+- The `.rb-next-turn-btn` class moved with the button, so it
+  travels to whatever host it's mounted in.
+
+**Decisions logged:**
+- **Why bottom-right**: all four corners of the starmap now
+  consistent — resources top-left, side panel top-right,
+  zoom bottom-left, next turn bottom-right. No more
+  "header strip" pattern.
+- **Why mirror the zoom 5px inset exactly**: visual symmetry.
+  If Next Turn was at 8px and zoom at 5px the corner layout
+  would feel uneven.
+- **`.rb-bar` panel chrome (background, border-bottom, padding)
+  kept** in this iteration — at this point the bar still looks
+  like a strip. Two iterations later (iter 2g) the strip is
+  gone and the chrome is neutralised, but the chrome code is
+  left in place so `mountResourceBar` still works headless.
+- **No spacer when button is detached**: the spacer only renders
+  when the button is mounted inside the bar (see `injectStyles`
+  and the `setNextTurnButtonHost` branch in the mount function).
+
+
+### Iter 2e — Tooltip strings finalised
+
+**Scope:**
+- Removed the icon-name prefix from the resource badge
+  tooltip. Now: "0 Agriculture Points" rather than
+  "agriculture 0 Agriculture Points". The icon is right
+  there visually; the suffix is redundant.
+- Confirmed the Next Turn tooltip wording:
+  `End turn N → start turn N+1` — explicit about what
+  "Next Turn" means (start the next turn).
+
+**Decisions logged:**
+- **Why "End turn N → start turn N+1" rather than just
+  "N → N+1"**: the dynamic version reads as game action
+  ("End turn N"). The plain version reads as arithmetic.
+  Players ask "what does Next Turn do?" — the explicit
+  version answers that in 4 words.
+- **Same arrow character (U+2192)** as iter 2c — one symbol
+  across the whole HUD for direction.
+
+
+### Iter 2f — Resource bar refresh refactor
+
+**Scope:**
+- `setPool(value, descriptor)` combined the previous two-call
+  `setCount(value); setDescriptor(d)` into one. The host now
+  passes the descriptor it already has (it's a stable shape),
+  the bar updates the count text and the badge `title` together.
+- Removed the stale `refreshResourceBar` call below
+  `newPlayer()` in `src/main.ts` — it was a leftover from
+  a debugging session before `setPool` existed.
+
+**Decisions logged:**
+- **One `setPool` call, not fluent chain**:
+  `bar.setPool(value, descriptor)` rather than
+  `bar.setDescriptor(d).setCount(value)`. Single method =
+  single tooltip update, no chance of the two calls getting
+  out of sync.
+- **Descriptor is passed in, not stored** by the bar itself:
+  the bar doesn't own resource definitions, the host does.
+  The bar just uses what it's given for that call.
+- **Stale-code bug pre-empted**: the unused `refreshResourceBar`
+  was found in `main.ts` below `newPlayer()`. Removed to avoid
+  the dead-code trap where someone later "fixes" the bug by
+  restoring it.
+
+
+### Iter 2g — Resource badges moved into the starmap
+
+**Scope:**
+- Removed the entire top header strip that wrapped the
+  resource bar (`<div id="resource-bar-host">` that previously
+  sat between `<section id="game-view">` and `<main>`).
+- Re-homed `#resource-bar-host` *inside* `#starmap-host`,
+  as the third positioned child (after canvas and side panel,
+  before zoom and next-turn hosts). The host now has
+  `position: absolute; top: 5px; left: 5px; z-index: 1`,
+  mirroring the other corner containers.
+- Neutralised the bar's dark panel chrome with a scoped
+  override so the badges float over the starfield without
+  a unifying header:
+  ```css
+  .resource-bar-host .rb-bar {
+    background: transparent;
+    border-bottom: none;
+    padding: 0;
+    gap: 6px;
+  }
+  ```
+- The badges themselves keep their own `panel-2` background
+  + accent border, so each one stays legible against the
+  starfield on its own (no shared "container" behind them).
+
+**Decisions logged:**
+- **Why an override instead of editing `.rb-bar` directly**:
+  the resource bar module owns its inner styles (`.rb-bar`
+  is created in JS by `injectStyles()`). Editing those would
+  change the look for any other consumer of `mountResourceBar`,
+  even though today there is only one. The override is scoped
+  to the new host and is the minimum surface area for this UI change.
+- **Re-used the existing id, didn't introduce a new one**.
+  `main.ts` already references
+  `document.getElementById('resource-bar-host')`. Moving the
+  element rather than introducing `#starmap-resource-bar-host`
+  keeps the JS surface identical.
+- **`top: 5px; left: 5px`** to match the existing corner-button
+  convention (zoom, next-turn both use 5px padding). The four
+  corners are now visually symmetric: zoom bottom-left,
+  resources top-left, next-turn bottom-right, side-panel top-right.
+- **`gap: 6px`** (down from the bar's 10px default) to make the
+  row feel more compact when it's just floating — 10px gaps
+  looked too sparse at the new smaller size.
+- **DOM order matters for stacking**: placed
+  `#resource-bar-host` *after* `#sidepanel-host` so it sits on
+  top of any selection panel that might be drawn there. (Same
+  stacking discipline as the zoom / next-turn containers.)
+
+
+### Iter 2h — Swap Agriculture & Industry icons
+
+**Scope:**
+- Replaced the Agriculture icon (was `building-storefront`, a
+  shop with awning) with a `grain` icon — three wheat-style
+  stalks, each a central stem with grain leaves alternating up
+  its length and a small V-shaped head at the top.
+- Replaced the Industry icon (was `building-office`, a tall
+  block with a 3×4 window grid) with a `factory` icon —
+  sawtooth roof with three peaks, a tall smokestack on the left
+  with a small window, a shorter block on the right with a
+  flag-like stub, a door in the middle, and two small windows
+  in the body.
+- Updated the file header doc comment so the resource list
+  matches the new icons.
+- The three remaining resources (Research/beaker, Culture/library,
+  Military/paper-plane) are unchanged.
+
+**Decisions logged:**
+- **No icon library**. The bar continues to draw SVG paths
+  inline, just like the other three icons. Bringing in
+  lucide / heroicons / feather would be ~100 kB for two icons
+  that take a handful of `<path d="...">` elements each. The
+  current approach is consistent with the rest of the file
+  and stays dependency-free.
+- **Why path-by-path hand-rolled**: the existing `buildIcon`
+  helper takes `iconPath: string[]` and applies the same stroke
+  / linecap / linejoin settings to every path. Sticking to that
+  contract means no helper changes — just rewrite the array
+  for the two affected resources.
+- **`iconName` strings updated to match**: `'grain'` and `'factory'`.
+  These strings aren't user-visible (we removed them from the
+  tooltip in iter 2e) but they're kept for accessibility /
+  future spec-name use.
+
+
+### Iter 2i — Single-stalk grain icon
+
+**Scope:**
+- Reduced the Agriculture icon from three grain stalks (27 paths)
+  to a single centred wheat stalk (11 paths). The stalk is
+  vertically centred at `x=12`, runs from `y=21` (bottom) to
+  `y=7` (top), with a small V-shaped head (`y=7` →
+  `(9.5, 5.5)` and `(14.5, 5.5)`) and 4 pairs of grain leaves
+  alternating at `y=9, 12, 15, 18`.
+- Industry icon unchanged.
+- `iconName` still `'grain'` — one wheat stalk is still grain.
+
+**Decisions logged:**
+- **Why single-stalk**: the three-stalk icon read as "weeds" or
+  "leaves" at the small 18px badge size because the three stems
+  visually merged into a horizontal mass. A single centred stalk
+  uses the full vertical extent of the 24×24 viewBox and is
+  unambiguous as wheat/grain at any scale.
+- **Centred at x=12** so the icon occupies the same visual
+  centre as the other single-subject icons (beaker, paper-plane,
+  library pediment).
+- **Path reduction (27 → 11)** is a 60% drop in stroke work
+  for the renderer — negligible for one icon but a nice
+  side-effect if we ever animate or tint the icon path-by-path.
+- **Why not move the stem off-centre to suggest leaning**:
+  wheat-head icons in real-world glyph sets (lucide, heroicons,
+  feather) almost always have the stem dead-centre. A leaning
+  stem would look like a wilted plant. Kept the stem straight.

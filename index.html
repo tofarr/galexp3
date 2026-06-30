@@ -235,6 +235,49 @@
       #starmap-canvas { position: absolute; inset: 0; }
       #starmap-canvas canvas { display: block; width: 100% !important; height: 100% !important; }
       #sidepanel-host { position: absolute; inset: 0; pointer-events: none; }
+      .starmap-zoom-controls {
+        position: absolute;
+        bottom: 5px;
+        left: 5px;
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+        z-index: 1;
+      }
+      .starmap-zoom-controls button {
+        width: 32px;
+        height: 32px;
+        padding: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--fg);
+      }
+      .starmap-zoom-controls button svg {
+        width: 18px;
+        height: 18px;
+      }
+      .next-turn-btn-host {
+        position: absolute;
+        bottom: 5px;
+        right: 5px;
+        z-index: 1;
+      }
+      .resource-bar-host {
+        position: absolute;
+        top: 5px;
+        left: 5px;
+        z-index: 1;
+      }
+      /* Override the bar's dark panel chrome — inside the starmap the
+         badges should float freely over the starfield without a
+         surrounding header strip. */
+      .resource-bar-host .rb-bar {
+        background: transparent;
+        border-bottom: none;
+        padding: 0;
+        gap: 6px;
+      }
       .starmap-controls {
         display: flex;
         gap: 10px;
@@ -280,37 +323,36 @@
          ==================================================================== -->
     <section id="game-view" class="view hidden" aria-label="Game view">
       <main>
-        <div class="row">
-          <label for="size-select">Galaxy size:</label>
-          <select id="size-select">
-            <option value="Small">Small (24 stars)</option>
-            <option value="Medium">Medium (33 stars)</option>
-            <option value="Large" selected>Large (48 stars)</option>
-            <option value="Huge">Huge (72 stars)</option>
-          </select>
-          <label for="seed-input">Seed:</label>
-          <input id="seed-input" type="number" value="42" style="background:var(--panel);color:var(--fg);border:1px solid var(--border);padding:5px 8px;border-radius:4px;font-size:13px;width:110px;" />
-          <button id="generate-btn">Generate</button>
-          <button id="random-seed-btn">Random seed</button>
-          <span id="stat-count" class="stat">stars: <b>–</b></span>
-          <span id="stat-radius" class="stat">radius: <b>–</b></span>
-          <span id="stat-valid" class="stat">isValidGalaxy: <b>–</b></span>
-        </div>
-
         <!-- Starmap: PixiJS canvas + side panel, anchored relative. -->
         <div id="starmap-host" class="starmap-host">
           <div id="starmap-canvas"></div>
           <div id="sidepanel-host"></div>
+          <div id="resource-bar-host" class="resource-bar-host"></div>
+          <div id="starmap-zoom-controls" class="starmap-zoom-controls">
+            <button id="zoom-in-btn" type="button" title="Zoom in" aria-label="Zoom in">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="10" cy="10" r="6"/>
+                <line x1="20" y1="20" x2="14.5" y2="14.5"/>
+                <line x1="7" y1="10" x2="13" y2="10"/>
+                <line x1="10" y1="7" x2="10" y2="13"/>
+              </svg>
+            </button>
+            <button id="zoom-out-btn" type="button" title="Zoom out" aria-label="Zoom out">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="10" cy="10" r="6"/>
+                <line x1="20" y1="20" x2="14.5" y2="14.5"/>
+                <line x1="7" y1="10" x2="13" y2="10"/>
+              </svg>
+            </button>
+          </div>
+          <div id="next-turn-btn-host" class="next-turn-btn-host"></div>
         </div>
 
         <div id="starmap-controls" class="starmap-controls">
-          <button id="zoom-in-btn" type="button">Zoom in</button>
-          <button id="zoom-out-btn" type="button">Zoom out</button>
           <button id="clear-selection-btn" type="button">Clear selection</button>
           <span id="starmap-status" class="stat">click: <b>–</b></span>
         </div>
 
-        <div id="galaxy-json">// Click "Generate" to build a galaxy.</div>
         <div id="status">Ready.</div>
       </main>
     </section>
