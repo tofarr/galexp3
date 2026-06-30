@@ -25,7 +25,13 @@
  * module is a dumb projection of state into shapes.
  */
 
-import { Application, BlurFilter, Container, Graphics } from 'pixi.js';
+import {
+  Application,
+  Container,
+  Graphics,
+  Sprite,
+  Texture,
+} from 'pixi.js';
 import {
   HIT_RADIUS_PX,
   NO_SELECTION,
@@ -78,13 +84,45 @@ const DISC_FILL_ALPHA = 0.35;
  * constant is a pure UI tuning knob so the visual size can be dialed
  * without touching the canonical spec.
  */
-const STAR_DISPLAY_SCALE = 1.5;
+const STAR_DISPLAY_SCALE = 1.8;
 
 /**
- * Independent multiplier on the blur strength only. Lets us soften the
- * glow without changing star sizes.
+ * Standard deviation (in normalised radius units, 0..1) of the radial
+ * gaussian baked into the bloom/halo sprite texture. 0.32 makes the
+ * gaussian drop to ≈0.008 alpha at the sprite's outer edge, which
+ * — multiplied by each layer's per-sprite alpha (≈0.24 for halo,
+ * ≈0.43 for bloom) — keeps the residual alpha at the sprite's hard
+ * rectangular edge below the dark-background visibility threshold.
+ * The visible bloom itself (alpha > ~0.05) extends out to r ≈ 0.65
+ * in normalised coords, well inside the sprite; the sprite is drawn
+ * HALO_SPREAD × larger than nominal so the visible bloom on screen
+ * is comfortably oversized compared to the canonical bloomRadius.
+ *
+ * (Earlier attempts at σ = 0.4–0.6 still left gauss(1) at 0.044–
+ * 0.25, which made the difference between the sprite's edge midpoint
+ * (r = 1 in normalised coords, gauss = 0.044) and its corner (r = √2,
+ * gauss = 0.0019) visible as a faint square outline against the dark
+ * background. With σ = 0.32, gauss(1) = 0.0076 and gauss(√2) =
+ * 0.0001 — both effectively zero — so the sprite's rectangular shape
+ * is invisible.)
  */
-const STAR_BLUR_SCALE = 0.75;
+const HALO_SPRITE_SIGMA = 0.32;
+
+/** Pixel size of the shared radial-gradient texture (square). 512
+ *  gives the gaussian plenty of texel density so the visible falloff
+ *  stays smooth even when a sprite is drawn at HALO_SPREAD × the
+ *  nominal radius (≈10× smaller than the texture). The texture is
+ *  generated once and shared across all stars, so the cost is one
+ *  512×512 RGBA upload for the whole galaxy. */
+const HALO_SPRITE_SIZE = 512;
+
+/** Multiplier applied to each sprite's nominal radius before scaling
+ *  the halo texture. Drawing each layer's sprite 2.5× larger than
+ *  its nominal radius pushes the sprite's edge (where the gaussian
+ *  is already at ≈0.04 alpha, i.e. invisible) well past the nominal
+ *  halo / bloom boundary, so the eye never perceives the sprite's
+ *  rectangular shape — just the gaussian's smooth, circular falloff. */
+const HALO_SPREAD = 2.5;
 
 /**
  * Parse a "0xRRGGBB" hex string (the format used by STAR_COLOR_FOR_COLOR
@@ -95,6 +133,63 @@ const STAR_BLUR_SCALE = 0.75;
  */
 function parseHexColor(hex: string): number {
   return parseInt(hex, 16) | 0;
+}
+
+/**
+ * Bake a single shared radial-gradient texture used by every star's
+ * halo and bloom sprite. Pixel alpha follows a 2D gaussian centred
+ * on the texture:
+ *
+ *   α(r) = exp(-r² / (2σ²))   where r ∈ [0, 1] is normalised radius
+ *
+ * Color is white; per-star colour comes from `sprite.tint` at draw time.
+ *
+ * The gaussian tail extends past r = 1 (into the sprite's corner
+ * pixels) so there is no hard circular cutoff at the sprite's edge;
+ * instead the alpha approaches zero smoothly because gauss drops off
+ * rapidly with radius (σ = HALO_SPRITE_SIGMA ⇒ gauss(1) ≈ 0.135).
+ * Each layer's sprite is then drawn at HALO_SPREAD × its nominal
+ * radius so the visible gaussian peak is comfortably inside the
+ * sprite and the natural tail carries the fade-out to (and past)
+ * the nominal halo / bloom boundary.
+ *
+ * One texture for the whole galaxy keeps GPU upload cost to a single
+ * small image regardless of star count, and avoids any live filter
+ * pipeline (BlurFilter smudged during the twinkle pulse, so we
+ * replaced it with a baked profile).
+ */
+function buildRadialHaloTexture(): Texture {
+  const size = HALO_SPRITE_SIZE;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Canvas 2D context unavailable for halo texture');
+  const img = ctx.createImageData(size, size);
+  const data = img.data;
+  const half = size / 2;
+  const sigmaPixels = HALO_SPRITE_SIGMA * half;
+  const twoSigmaSq = 2 * sigmaPixels * sigmaPixels;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const dx = x - half + 0.5;
+      const dy = y - half + 0.5;
+      const r2 = dx * dx + dy * dy;
+      const a = r2 > 0 ? Math.exp(-r2 / twoSigmaSq) : 1;
+      const idx = (y * size + x) * 4;
+      data[idx + 0] = 255;
+      data[idx + 1] = 255;
+      data[idx + 2] = 255;
+      data[idx + 3] = Math.round(a * 255);
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const texture = Texture.from(canvas);
+  // Linear filtering so scale changes during twinkle don't pop
+  // (the gaussian is already smooth in source space, so this is
+  // free of aliasing as long as the sprite isn't shrunk below 1px).
+  texture.source.scaleMode = 'linear';
+  return texture;
 }
 
 // ---------------------------------------------------------------------------
@@ -277,6 +372,13 @@ export async function mountStarmap(
   // Pre-render the procedural starfield. It doesn't depend on galaxy
   // or camera state, so we paint it once at mount and forget.
   paintDust(dustLayer, generateDustStars(viewport), viewport);
+
+  // Bake the radial-gradient sprite once per renderer. Reused for
+  // every star's halo and bloom sprite — colour comes from
+  // `sprite.tint`, not the texture, so a single texture covers the
+  // entire galaxy's bloom rendering.
+  const haloTexture = buildRadialHaloTexture();
+  const HALO_SPRITE_HALF = HALO_SPRITE_SIZE / 2;
 
   // Mutable renderer state.
   let currentGalaxy: GalaxySubset = { radius: 0, stars: [] };
@@ -496,10 +598,12 @@ export async function mountStarmap(
   interface StarRenderEntry {
     readonly star: import('../sim/galaxy').Star;
     readonly container: Container;
-    readonly glow: Graphics;
+    /** Soft outer halo — sprite tinted with the halo colour. */
+    readonly haloSprite: Sprite;
+    /** Inner bloom — sprite tinted with the body colour. */
+    readonly bloomSprite: Sprite;
+    /** Sharp white core dot — Graphics (unblurred, opaque). */
     readonly highlight: Graphics;
-    /** Blur strength at scale 1.0; multiplied by twinkle scale each frame. */
-    readonly baseBlurStrength: number;
     /** Current visual scale, cached to skip no-op .scale.set calls. */
     lastScale: number;
     twinkle: StarTwinkleState;
@@ -547,26 +651,29 @@ export async function mountStarmap(
       ? COLOR_STAR_SELECTED
       : parseHexColor(STAR_HALO_COLOR_FOR_COLOR[star.color]);
 
-    // Blurred glow (halo + bloom + white core on one Graphics so a
-    // single BlurFilter can be applied).
-    const glow = new Graphics();
-    glow.circle(0, 0, haloRadius).fill({
-      color: haloColor,
-      alpha: STAR_HALO_ALPHA / 255,
-    });
-    glow.circle(0, 0, bloomRadius).fill({
-      color: bodyColor,
-      alpha: STAR_BLOOM_ALPHA / 255,
-    });
-    glow.circle(0, 0, bodyRadius).fill({
-      color: 0xffffff,
-      alpha: STAR_CORE_ALPHA / 255,
-    });
-    const baseBlurStrength =
-      2.5 * STAR_DISPLAY_SCALE * STAR_BLUR_SCALE;
-    glow.filters = [new BlurFilter({ strength: baseBlurStrength })];
+    // Two stacked sprites share the same radial-gradient texture.
+    // Each sprite's `scale` sizes it to HALO_SPREAD × the layer's
+    // nominal radius — drawing the sprite LARGER than the nominal
+    // boundary lets the gaussian's natural tail carry the fade-out
+    // inside the sprite rather than being clipped at the boundary,
+    // which would otherwise appear as a visible ring.
+    // `tint` colours it; `alpha` modulates overall layer opacity
+    // against the baked-in gaussian profile. The texture is shared
+    // and uploaded once for the whole galaxy.
+    const haloSprite = new Sprite(haloTexture);
+    haloSprite.tint = haloColor;
+    haloSprite.anchor.set(0.5);
+    haloSprite.scale.set((haloRadius * HALO_SPREAD) / HALO_SPRITE_HALF);
+    haloSprite.alpha = STAR_HALO_ALPHA / 255;
 
-    // Sharp highlight dot — unblurred.
+    const bloomSprite = new Sprite(haloTexture);
+    bloomSprite.tint = bodyColor;
+    bloomSprite.anchor.set(0.5);
+    bloomSprite.scale.set((bloomRadius * HALO_SPREAD) / HALO_SPRITE_HALF);
+    bloomSprite.alpha = STAR_BLOOM_ALPHA / 255;
+
+    // Sharp white core dot — unblurred, opaque. Sits on top of the
+    // bloom sprite so the eye always sees a bright centre.
     const highlightRadius = Math.max(
       0.5,
       bodyRadius * 0.4 * STAR_DISPLAY_SCALE,
@@ -578,7 +685,8 @@ export async function mountStarmap(
     });
 
     const container = new Container();
-    container.addChild(glow);
+    container.addChild(haloSprite);
+    container.addChild(bloomSprite);
     container.addChild(highlight);
     // Position is set later, in paintStars(), via projectStar. (We
     // could do it here if currentCamera were already applied to the
@@ -590,9 +698,9 @@ export async function mountStarmap(
     return {
       star,
       container,
-      glow,
+      haloSprite,
+      bloomSprite,
       highlight,
-      baseBlurStrength,
       lastScale: 1,
       twinkle: initStarTwinkle(performance.now(), scheduleIntervalMs(rng)),
       rng,
@@ -647,23 +755,26 @@ export async function mountStarmap(
   // CPU cost when nothing is twinkling is a single for-loop over the
   // star set.
   //
-  // The loop stops when every star is idle AND no star's nextAt is
-  // imminent (within TWINKLE_LOOKAHEAD_MS). Any user interaction
-  // that rebuilds the cache re-starts the loop.
-
-  /** How far ahead (ms) we look for a star whose pulse is about to
-   *  begin; we keep the RAF loop running if any star's nextAt is
-   *  inside this window. */
-  const TWINKLE_LOOKAHEAD_MS = 100;
+  // The loop runs continuously for as long as the starmap is
+  // mounted and the star cache is non-empty; the per-tick cost
+  // when nothing is pulsing is a single O(N) scan that returns
+  // 0 changed scales (no render). On unmount, the destroy path
+  // cancels the pending RAF. Any user interaction that rebuilds
+  // the cache re-starts the loop.
 
   let twinkleRaf: number | null = null;
 
-  function twinkleShouldKeepLooping(now: number): boolean {
-    for (const entry of starCache.values()) {
-      if (entry.twinkle.pulse !== null) return true;
-      if (entry.twinkle.nextAtMs <= now + TWINKLE_LOOKAHEAD_MS) return true;
-    }
-    return false;
+  function twinkleShouldKeepLooping(_now: number): boolean {
+    // Keep the RAF loop alive for as long as there are stars in
+    // the cache. The per-tick cost when nothing is pulsing is
+    // just an O(N) scan that returns 0 changed scales; no render
+    // happens. We deliberately dropped the previous 100 ms
+    // "lookahead" heuristic because it could be shorter than the
+    // configured MAX interval, leaving the loop dead between
+    // pulses and starving future pulses from ever firing. The
+    // teardown path (renderer_destroy) cancels the RAF, so
+    // unmount is still clean.
+    return starCache.size > 0;
   }
 
   function twinkleTick(now: number): boolean {
@@ -672,14 +783,6 @@ export async function mountStarmap(
       const scale = advanceStarTwinkle(entry.twinkle, now, entry.rng);
       if (Math.abs(scale - entry.lastScale) > 1e-6) {
         entry.container.scale.set(scale, scale);
-        // Keep the glow proportional: scaling the container alone
-        // would leave the blur in pixel-space, which makes the
-        // pulse look like a "tighter" bright spot rather than a
-        // bigger soft one.
-        const filter = entry.glow.filters?.[0] as BlurFilter | undefined;
-        if (filter) {
-          filter.strength = entry.baseBlurStrength * scale;
-        }
         entry.lastScale = scale;
         changed = true;
       }

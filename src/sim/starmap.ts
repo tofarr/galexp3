@@ -87,7 +87,7 @@ export const MAX_ZOOM_PCT = 800;
 export const INITIAL_ZOOM_PCT = 100;
 
 /** Hit-test tolerance in screen pixels (Chebyshev radius). */
-export const HIT_RADIUS_PX = 10;
+export const HIT_RADIUS_PX = 12;
 
 /** Initial camera: centred on the galaxy origin, zoom = 1.0x. */
 export const initialCamera: Camera = {

@@ -15,19 +15,22 @@
  */
 
 /** Peak scale at the apex of a pulse. 1.10 = +10%. */
-export const STAR_TWINKLE_PEAK_SCALE = 1.1;
+export const STAR_TWINKLE_PEAK_SCALE = 1.2;
 
-/** Smallest interval between two pulses on the same star, in ms. */
+/** Smallest interval between two pulses on the same star, in ms.
+ *  With MAX = 6000 the average gap is ~3.75 s — about 1/10 of the
+ *  pre-tuning rate (when this was 150/600 ms) so the galaxy feels
+ *  alive without being distracting. */
 export const STAR_TWINKLE_INTERVAL_MIN_MS = 1500;
 
 /** Largest interval between two pulses on the same star, in ms. */
 export const STAR_TWINKLE_INTERVAL_MAX_MS = 6000;
 
 /** Shortest single-pulse duration, in ms. */
-export const STAR_TWINKLE_DURATION_MIN_MS = 250;
+export const STAR_TWINKLE_DURATION_MIN_MS = 500;
 
 /** Longest single-pulse duration, in ms. */
-export const STAR_TWINKLE_DURATION_MAX_MS = 1100;
+export const STAR_TWINKLE_DURATION_MAX_MS = 5000;
 
 /**
  * Multiplicative scale for a star whose pulse has progressed a
