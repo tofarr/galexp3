@@ -287,3 +287,143 @@ src/
   `1` (WebGL) or `2` (WebGPU) for filters to run. If it's `4`
   (Canvas), GPU features won't run.
 
+## Quint 0.22.4 quirks — WORKAROUNDS
+
+Confirmed bugs in the bundled Quint version; these patterns are
+required, not optional:
+
+- **`.filter` / `.exists` / `.forall` / `.size` on Lists** throw or
+  return wrong answers. Don't use them. Replace with `foldl`
+  (always) or head/tail recursion.
+- **`List.append(x)` on the result of a `foldl`** works, but ONLY
+  when the fold seed and lambda are unambiguously typed. The
+  pattern that always works is:
+  ```quint
+  xs.foldl(List(), (acc, x) => if (cond(x)) acc.append(x) else acc)
+  ```
+- **Empty-list seeds with type parameters** parse-fail.
+  Use `List()`, NOT `List[T]()`. The element type is inferred
+  from the rest of the fold.
+- **`Set()` as a foldl seed** is fine when used directly, BUT the
+  common pattern `if (xs == List()) Set() else Set(xs[0].field)`
+  is dangerous when used to seed a Set-fold whose purpose is to
+  EXCLUDE the first element. The pattern silently puts the first
+  element's field into the result set even when it shouldn't be
+  there (e.g., seeding a "demolish targets" set with the first
+  order's popUnitId wrongly includes a build order in the set,
+  which then silently drops a healthy pop unit from the population).
+  **Rule: when computing "the subset that satisfies P", seed with
+  `Set()` (or `List()`) and let the lambda add only the matching
+  elements. Don't pre-seed with `xs[0]` and rely on the lambda
+  to filter — the seed is unconditional.**
+- **`head` is a Quint keyword** and shadows when used as a
+  variable name. Use `firstP`, `firstStar`, `headElem`, etc.
+- **Lists with element-of-type T where T has a `Set[int]` field**
+  work fine through `foldl`/`append`, but if a complex fold ever
+  drops elements inexplicably, bisect: replace the Set fold with
+  a hardcoded `Set(N)` and see whether the drop goes away. If it
+  does, the bug is in the Set fold, not the List fold.
+
+### Iter 2a — Player + colony + resource model
+
+**Scope:**
+- New spec module: `quint/empire.qnt`.
+- Types: `ResourceType`, `ResourcePool` (4-tuple of
+  agriculture/industry/academic/culture ints),
+  `Player`, `Race`, `EmpireStar`, `PopulationUnit`, `CenterType`,
+  `ConstructionOrder`, `Colony`, `EmpireGalaxy`.
+- Cost helpers: `popGrowthCost` (industry per 10 years), `popSpawnCost`,
+  `popSpawnCount` (binary doubling helper).
+- Build/demolish pipeline helpers: `applyBuildTo`, `applyConstruction`,
+  `isDemolishTarget`, `findLastBuild`.
+- Validity predicates: `isValidColony`, `isValidEmpire`.
+- 7 property tests in the spec layer; all pass.
+
+**Spec mirror:** TS mirror in `src/sim/empire.ts` + tests in
+`src/sim/empire.test.ts` — to be written next iteration.
+
+**Decisions logged:**
+- The resource pool is a **4-tuple**, not a map from `ResourceType`
+  to int. Tuples are easier to fold over, cheaper to equality-
+  compare, and the closed set of resources won't grow. If we add
+  a 5th resource later, this is the kind of thing to refactor
+  while it's still cheap.
+- `popSpawnCost` and `popSpawnCount` use the formula
+  `10 * 2^overBy` where `overBy` is the number of pop units
+  added beyond the colony's maxPopulation. Implemented with a
+  `pow2` helper because Quint's built-in `pow` operates on
+  `int` and `2` must be promoted carefully (use a `mul` helper
+  instead of `*` inside the recursion).
+- Demolish **removes** the pop unit from the colony's population,
+  not just resets its center to "none". This keeps the population
+  count honest and avoids zombies. (Confirmed by the bug fix
+  in this iteration: the initial implementation seeded demTarget
+  with `Set(orders[0].popUnitId)` which wrongly included a build
+  order and silently dropped a healthy pop. The seed-with-first
+  pattern is correct ONLY when you genuinely want every element
+  to be in the resulting set.)
+
+### Iter 2b — New Game setup dialog
+
+**Scope:**
+- New UI module: `src/ui/newGameDialog.ts`. Self-contained
+  modal-ish dialog that opens on "New Game" from the main menu.
+- Galaxy size: 4 radio-button cards in a 2×2 grid
+  (Small/Medium/Large/Huge) with star-count hints.
+- Seed: number input + Random button. Defaults: Large, seed 42.
+- Actions: Cancel + Start (primary). Escape and backdrop click
+  both dismiss without starting. Validation on Start for non-
+  integer seed → inline error message.
+- After Start: routes to the game view, mirrors (size, seed)
+  into the existing in-game controls so they stay in sync,
+  and runs the same generation path as before.
+- Wiring: `startNewGame()` in `main.ts` now opens the dialog
+  instead of jumping straight to the game view with hardcoded
+  defaults. The existing in-game controls remain a useful
+  "regenerate with current settings" affordance.
+
+**Decisions logged:**
+- **Dialog is mounted lazily on `open()`** and torn down on
+  `close()`, not retained in the DOM between opens. Each open
+  gets fresh defaults and clean state (no stale error messages,
+  no leftover focus).
+- **Galaxy size uses radios, not a `<select>`**. The 2×2 card
+  grid makes the four options visible at a glance and shows
+  the star-count hint alongside each one. Same visual
+  language as the menu's button cards.
+- **Radio buttons are hidden, label is the visible target**
+  (`display:none` on input, styling on label). This gives us
+  full control of the visual state (`:has(input:checked)`)
+  without browser-default radio styling.
+- **No state survives between opens**. If the user picks Huge
+  with seed=99, then cancels, then re-opens — they see Large
+  with seed 42 again. This is intentional for now (the
+  dialog is a "fresh start" affordance; remembering last
+  choice can come when there's actual gameplay state to
+  preserve).
+- **Generated HTML dialog is created with `document.createElement`**
+  (not innerHTML) and uses `textContent` for user-visible
+  strings. Safer than string interpolation; no XSS risk from
+  the seed field, even though we already `Number.parseInt` it.
+- **CSS injected once** via a tagged `<style>` element with
+  `id="new-game-dialog-styles"`. Idempotent guard prevents
+  duplicate injection on HMR.
+- **Backdrop click + Escape close the dialog** without
+  starting a game. Standard modal UX. The Escape listener is
+  scoped to the dialog's lifetime so it doesn't leak between
+  opens.
+
+**Debugging breadcrumbs for the future:**
+- `vite preview` listens on `localhost` by default, NOT on
+  `127.0.0.1`. If a curl from `127.0.0.1` fails with
+  `connection refused`, try `localhost` — or pass `--host`
+  to bind to all interfaces.
+- `:has()` selector works in modern browsers (Chromium, Safari,
+  Firefox 121+) for the "checked radio highlights its label"
+  pattern. No JS toggle needed.
+- The dialog mounts into `#new-game-dialog-host` (a sibling of
+  the menu card) inside the menu view. Both are hidden when
+  the game view is active, so the dialog effectively unmounts
+  with the menu — but the JS object lives for the page
+  lifetime, which is what we want for re-opening.
+

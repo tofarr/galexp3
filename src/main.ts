@@ -49,6 +49,7 @@ import {
 import { mountMenuBackground, type MenuBackground } from './ui/menuBackground';
 import { mountStarmap, type StarmapRenderer } from './ui/starmap';
 import { mountSidePanel, type SidePanel } from './ui/sidepanel';
+import { mountNewGameDialog, type NewGameDialog } from './ui/newGameDialog';
 
 type AppView = 'menu' | 'game';
 
@@ -81,6 +82,7 @@ const zoomInBtn = document.getElementById('zoom-in-btn') as HTMLButtonElement;
 const zoomOutBtn = document.getElementById('zoom-out-btn') as HTMLButtonElement;
 const clearSelBtn = document.getElementById('clear-selection-btn') as HTMLButtonElement;
 const starmapStatus = document.getElementById('starmap-status')!.querySelector('b')!;
+const newGameDialogHost = document.getElementById('new-game-dialog-host') as HTMLElement;
 
 /** Duration of camera animation tweens (zoom + recenter). */
 const ZOOM_ANIMATION_MS = 180;
@@ -92,6 +94,7 @@ const requiredElements = {
   statCount, statRadius, statValid, jsonOut, statusEl,
   starmapCanvas, sidepanelHost,
   zoomInBtn, zoomOutBtn, clearSelBtn, starmapStatus,
+  newGameDialogHost,
 };
 for (const [name, el] of Object.entries(requiredElements)) {
   if (!el) throw new Error(`main.ts: required DOM element missing: ${name}`);
@@ -135,6 +138,17 @@ interface GameRuntime {
 }
 
 let runtime: GameRuntime | null = null;
+
+// ---------------------------------------------------------------------------
+// New Game dialog
+// ---------------------------------------------------------------------------
+
+const newGameDialog: NewGameDialog = mountNewGameDialog(newGameDialogHost);
+newGameDialog.onStart(({ size, seed }) => {
+  showView('game');
+  applyNewGame(size, seed);
+  setStatus('New game started. (Save/load not yet implemented.)', 'ok');
+});
 
 function setStatus(msg: string, kind: 'ok' | 'err' | '' = ''): void {
   statusEl.textContent = msg;
@@ -277,12 +291,25 @@ function generateGalaxyInView(): void {
     setStatus(`Invalid galaxy size: ${sizeRaw}`, 'err');
     return;
   }
-  const size: GalaxySize = sizeRaw;
   const seed = Number.parseInt(seedInput.value, 10);
   if (!Number.isFinite(seed)) {
     setStatus('Seed must be an integer.', 'err');
     return;
   }
+  applyNewGame(sizeRaw, seed);
+}
+
+/**
+ * Generate a galaxy from a (size, seed) pair (regardless of where
+ * those values came from — the in-game controls or the New Game
+ * dialog). The in-game control values are mirrored so they stay
+ * in sync with whatever was last chosen.
+ */
+function applyNewGame(size: GalaxySize, seed: number): void {
+  // Mirror the choice into the in-game controls so the user sees
+  // what they started with if they later tweak from the game view.
+  sizeSelect.value = size;
+  seedInput.value = String(seed);
 
   try {
     const galaxy = initGalaxy(seed, size);
@@ -344,11 +371,9 @@ function showView(view: AppView): void {
 }
 
 function startNewGame(): void {
-  showView('game');
-  sizeSelect.value = 'Large';
-  seedInput.value = '42';
-  generateGalaxyInView();
-  setStatus('New game started. (Save/load not yet implemented.)', 'ok');
+  // Open the New Game dialog. Once the user picks (size, seed) and
+  // presses Start, we route to the game view and generate.
+  newGameDialog.open();
 }
 
 function startLoadGame(): void {
