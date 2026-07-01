@@ -1334,3 +1334,84 @@ the star, instead of orbiting "planet-shaped" rings.
   independent — but worth knowing). If a future iter
   wants the cloud *behind* the planets, swap the
   insertion order.
+
+### Iter 3a-e — Star selection animates the camera pan
+
+**Problem.** Clicking a star jumped the camera to the new
+position instantly. The user reported the centre motion
+was abrupt. The cause: `applyState(next)` was calling
+`renderer.setCamera(next.camera)` *synchronously*, then
+`renderer.panTo(targetPan, ZOOM_ANIMATION_MS)` was
+called to "animate" — but the camera was already at the
+target, so the tween was a no-op. The user saw only the
+instant jump.
+
+**Scope:**
+- Split `applyState` into two:
+  - `applyStateWithCamera(next)` — original behaviour
+    (state + renderer.setCamera + selection + panel).
+    Used by non-click flows: the X button
+    (`closePlanetMenu`) and the Clear Selection button
+    (`clearSelection`). Neither of those changes the
+    camera, so the synchronous `setCamera` is harmless.
+  - `applyStateDeferCamera(next)` — new variant. Updates
+    `runtime.state`, calls `renderer.setSelection`, and
+    updates the side panel, but does NOT touch
+    `renderer.setCamera`. The state object reflects the
+    new camera target; only the renderer's camera is left
+    as-is so the subsequent `renderer.panTo(...)` can
+    tween smoothly from the *current rendered position* to
+    the *target* (rather than from the target to the
+    target).
+- The click handler now uses
+  `applyStateDeferCamera` and kicks off the
+  `renderer.panTo(...)` tween immediately. When the tween
+  completes, the `.then(...)` handler updates
+  `runtime.state.camera` to the final value so the
+  in-memory state stays in sync with the rendered camera.
+- If the camera doesn't actually move (e.g. selection
+  on the same star), the handler calls
+  `renderer.setCamera(next.camera)` synchronously
+  inside the `else` branch — no tween needed, but we
+  still need the renderer to know the new camera.
+
+**Decisions logged:**
+- **Why a new helper instead of an optional flag on
+  `applyState`?** The two callers (X button vs. click
+  handler) have different needs:
+  - X button: no camera change, no animation, instant
+    setCamera is fine.
+  - Click handler: camera change, animated.
+
+  A boolean parameter (`applyState(next, {deferCamera})`)
+  would have worked, but two clearly-named functions
+  document the intent better at the call site. Plus the
+  deferred version has the additional "if camera didn't
+  move, set it now" guard inside, which would have
+  required more branching inside the click handler.
+- **`runtime.state` is updated immediately even when
+  the camera is deferred.** The state object is the
+  source of truth for downstream logic (clicks, panel
+  state, future game actions). If we waited for the
+  tween to complete before updating `runtime.state`,
+  rapid clicks during the tween would see stale
+  state. Better to have the in-memory state reflect the
+  intent immediately and let the tween catch up the
+  visible camera.
+
+**Verified:** `tsc --noEmit` clean, `npm test` 170/170,
+`npm run build` clean. The camera now smoothly tweens
+to centre on the selected star over `ZOOM_ANIMATION_MS`
+(180 ms) — the change is visible at the canvas, not
+just the panel.
+
+**Debugging breadcrumbs for the future:**
+- **When a tween depends on the previous render's camera,
+  never call `setCamera` synchronously before the tween
+  starts.** The tween's `from` is the renderer's current
+  state; pre-setting the camera to the target makes the
+  tween a no-op. The pattern here (`applyState` updates
+  state + selection + panel, then a separate `panTo` for
+  the camera) is the safe one. Apply it to any future
+  "smoothly move the camera" handler (e.g. drag-to-pan,
+  keyboard arrow keys, "centre on next colony").

@@ -279,9 +279,39 @@ async function ensureStarmap(galaxy: Galaxy): Promise<void> {
 
 function applyState(next: StarmapState): void {
   if (!runtime) return;
+  applyStateWithCamera(next);
+}
+
+function applyStateWithCamera(next: StarmapState): void {
+  if (!runtime) return;
   const { renderer, sidePanel } = runtime;
   runtime.state = next;
   renderer.setCamera(next.camera);
+  renderer.setSelection(next.selectedId);
+  if (next.selectedId === NO_SELECTION) {
+    sidePanel.clear();
+  } else {
+    sidePanel.showStar(next.selectedId, runtime.galaxy);
+  }
+}
+
+/**
+ * Apply everything in `next` EXCEPT the camera, which is
+ * expected to be tweened by the caller (via `renderer.panTo`
+ * or `renderer.zoomBy`). The state object is updated with the
+ * full `next` immediately so subsequent logic (clicks,
+ * renderers) sees the new state; only the renderer's camera
+ * is left as-is so the tween can animate it smoothly.
+ *
+ * When the tween completes, the caller is responsible for
+ * updating `runtime.state.camera` to the final tweened value
+ * (so the in-memory state and the rendered camera stay in
+ * sync).
+ */
+function applyStateDeferCamera(next: StarmapState): void {
+  if (!runtime) return;
+  const { renderer, sidePanel } = runtime;
+  runtime.state = next;
   renderer.setSelection(next.selectedId);
   if (next.selectedId === NO_SELECTION) {
     sidePanel.clear();
@@ -321,14 +351,17 @@ function attachStarmapEvents(): void {
     );
     if (next !== runtime.state) {
       // Camera moved (new or different selection, or empty pan).
-      // Animate to the new camera via the renderer so the transition
-      // is smooth. For star selections the camera target is the
-      // star itself (already in `next.camera.pan`); for empty clicks
-      // it's the world point under the cursor.
+      // We DEFER the camera update so the pan/zoom tween can
+      // animate it smoothly. `applyStateDeferCamera` updates
+      // the state object, selection, and side panel
+      // synchronously — only the renderer's camera is left
+      // untouched, so `renderer.panTo` (called below) can
+      // tween from the current rendered position to the
+      // target.
       const cameraMoved = next.camera.pan.x !== runtime.state.camera.pan.x
         || next.camera.pan.y !== runtime.state.camera.pan.y
         || next.camera.zoom !== runtime.state.camera.zoom;
-      applyState(next);
+      applyStateDeferCamera(next);
       if (cameraMoved) {
         const targetPan = id === NO_SELECTION
           ? renderer.worldPointFromClient(ev.clientX, ev.clientY)
@@ -337,11 +370,20 @@ function attachStarmapEvents(): void {
           .panTo(targetPan, ZOOM_ANIMATION_MS)
           .then((finalCamera) => {
             if (!runtime) return;
+            // Sync the in-memory camera with what we just
+            // rendered. The selection / panel were already
+            // updated synchronously above; this just catches
+            // up the camera.
             runtime.state = { ...runtime.state, camera: finalCamera };
           })
           .catch(() => {
             /* superseded by a newer tween */
           });
+      } else {
+        // No camera animation needed, but `applyStateDeferCamera`
+        // skipped the `setCamera` call. Set it now so the
+        // rendered camera matches the in-memory state.
+        renderer.setCamera(next.camera);
       }
     }
     // else: click was on empty space outside the galaxy disc — neither
