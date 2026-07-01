@@ -1,4 +1,9 @@
 import { nameStars } from './names';
+import {
+  generateStarSystemForStar,
+  isValidStarSystem,
+  type StarSystem,
+} from './starSystem';
 
 /**
  * Galaxy data model.
@@ -180,6 +185,13 @@ export interface Star {
   readonly size: number;
   readonly position: Position;
   readonly name: string;
+  /**
+   * The star's orbital system: 8 slots, each Empty / Asteroids /
+   * DustCloud / GasGiant / Planet. Generated deterministically
+   * from the (seed, star.id) pair at galaxy construction time
+   * (see `generateStarSystemForStar` in src/sim/starSystem.ts).
+   */
+  readonly system: StarSystem;
 }
 
 export interface Galaxy {
@@ -315,6 +327,10 @@ export function initGalaxy(seed: number, size: GalaxySize): Galaxy {
       color: STAR_COLORS[stars.length % STAR_COLORS.length]!,
       size: sizeRaw,
       position: candidate,
+      // The system is derived from (seed, starId) — same star always
+      // gets the same planets. We pass the id that just got assigned
+      // (stars.length + 1).
+      system: generateStarSystemForStar(seed, stars.length + 1),
     });
   }
 
@@ -354,6 +370,7 @@ export function isValidGalaxy(g: Galaxy): boolean {
     }
 
     if (!isValidSize(s.size)) return false;
+    if (!isValidStarSystem(s.system)) return false;
   }
   return true;
 }

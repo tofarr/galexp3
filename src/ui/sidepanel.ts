@@ -14,6 +14,8 @@
 
 import type { GalaxySubset } from '../sim/starmap';
 import { NO_SELECTION } from '../sim/starmap';
+import { emptyStarSystem } from '../sim/starSystem';
+import { mountStarSystemView, type StarSystemView } from './starSystemView';
 
 // ---------------------------------------------------------------------------
 // DOM structure
@@ -60,6 +62,27 @@ function injectStyles(): void {
     }
     .${PANEL_CLASS}.${PANEL_VISIBLE_CLASS} { pointer-events: auto; }
     .${PANEL_CLASS}.${PANEL_OPEN_CLASS} { transform: translateX(0); }
+
+    /* The animated star-system background sits at the very back of
+       the panel, fills it, and is dimmed to 20% opacity so the
+       text content reads clearly on top. pointer-events:none so the
+       SVG doesn't intercept clicks meant for the close button. */
+    .sidepanel-bg {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.20;
+      z-index: 0;
+      overflow: hidden;
+    }
+    .sidepanel-bg svg.ssv-svg {
+      display: block;
+    }
+    /* Foreground content sits above the background. */
+    .sidepanel-content {
+      position: relative;
+      z-index: 1;
+    }
 
     .sidepanel-header-row {
       display: flex;
@@ -159,6 +182,21 @@ export function mountSidePanel(
   panel.setAttribute('aria-label', 'Selection details');
   panel.setAttribute('role', 'complementary');
 
+  // ---- Background layer (animated star-system view) ----
+  // Sits at z-index 0 inside the panel, with `opacity: 0.2` and
+  // `pointer-events: none` so it never blocks the X button. The
+  // star-system view owns its own DOM (SVG, animation elements).
+  const bgLayer = document.createElement('div');
+  bgLayer.className = 'sidepanel-bg';
+  panel.appendChild(bgLayer);
+  const systemView: StarSystemView = mountStarSystemView(bgLayer);
+
+  // ---- Foreground content layer ----
+  // Wraps all the text/button content in a relative-positioned
+  // container so it sits above the background (z-index 1).
+  const content = document.createElement('div');
+  content.className = 'sidepanel-content';
+
   const headerRow = document.createElement('div');
   headerRow.className = 'sidepanel-header-row';
 
@@ -190,15 +228,21 @@ export function mountSidePanel(
 
   const footer = document.createElement('div');
   footer.className = 'sidepanel-footer';
-  footer.textContent = 'Iteration 2l — planet menu';
+  footer.textContent = 'Iteration 3a — star system';
 
-  panel.appendChild(headerRow);
-  panel.appendChild(empty);
-  panel.appendChild(footer);
+  content.appendChild(headerRow);
+  content.appendChild(empty);
+  content.appendChild(footer);
+
+  panel.appendChild(content);
 
   container.appendChild(panel);
 
   let mounted = true;
+
+  // We don't need to call setStar() at mount time — the view
+  // paints a sensible placeholder (all-empty White star, size 50)
+  // on creation. The first real showStar() will replace it.
 
   function showStar(id: number, galaxy: GalaxySubset): void {
     if (!mounted) return;
@@ -210,6 +254,15 @@ export function mountSidePanel(
     nameEl.textContent = star.name;
     nameEl.style.display = '';
     empty.style.display = 'none';
+    // Hand the entire Star to the background view. The view uses
+    // `star.color` for the body+halo palette and `star.size` for
+    // the relative layer radii (halo/body/core). If the host
+    // passed a `Star` without a `system` (older fixtures), we
+    // synthesise an all-empty one so the background doesn't crash.
+    const starForView: typeof star = star.system
+      ? star
+      : { ...star, system: emptyStarSystem(star.id) };
+    systemView.setStar(starForView);
     panel.classList.add(PANEL_VISIBLE_CLASS, PANEL_OPEN_CLASS);
   }
 
@@ -218,6 +271,11 @@ export function mountSidePanel(
     nameEl.textContent = '—';
     nameEl.style.display = '';
     empty.style.display = '';
+    // The view paints a neutral placeholder when no system is set,
+    // but we want a clean reset on clear(). Re-mounting is heavy;
+    // instead we synthesise a placeholder Star (no selected star,
+    // so the view falls back to its all-empty White placeholder).
+    // The view's `setStar` always re-paints, so this is enough.
     panel.classList.remove(PANEL_OPEN_CLASS);
     // Keep the panel mounted but unclickable; a later showStar() will
     // re-open it. We delay removing the visible flag so the slide-out
@@ -231,11 +289,19 @@ export function mountSidePanel(
   function destroy(): void {
     if (!mounted) return;
     mounted = false;
+    systemView.destroy();
     panel.remove();
   }
 
   return { showStar, clear, destroy };
 }
+
+// The star-system view owns its own colour mapping (it imports
+// STAR_COLOR_FOR_COLOR / STAR_HALO_COLOR_FOR_COLOR directly from
+// @sim/galaxy). The sidepanel just hands the view the full Star
+// and lets it look up the right palette internally — keeps the
+// colour tables in one place (the sim layer, where they live with
+// the rest of the star data model).
 
 /** Sentinel re-export so main.ts can pass `NO_SELECTION` through. */
 export { NO_SELECTION };

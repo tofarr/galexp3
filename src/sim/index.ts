@@ -5,3 +5,4 @@
 
 export * from './galaxy';
 export * from './starmap';
+export * from './starSystem';

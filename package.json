@@ -11,7 +11,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "spec": "quint",
-    "spec:test": "for f in quint/galaxy.qnt quint/starmap.qnt; do npx quint test --match='.*' \"$f\"; done",
+    "spec:test": "for f in quint/starmap.qnt quint/starSystem.qnt; do npx quint test --match='.*' \"$f\"; done",
     "spec:check": "for f in quint/galaxy.qnt quint/starmap.qnt; do npx quint typecheck \"$f\"; done"
   },
   "dependencies": {

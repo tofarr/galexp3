@@ -8,6 +8,7 @@
 import { describe, it, expect } from 'vitest';
 import * as fc from 'fast-check';
 import { RADIUS_FOR_SIZE, GALAXY_SIZES, initGalaxy, type GalaxySize, type Star } from './galaxy';
+import { emptyStarSystem } from './starSystem';
 import {
   HIT_RADIUS_PX,
   INITIAL_ZOOM_PCT,
@@ -223,7 +224,7 @@ describe('starmap — projectStar / unprojectPoint round trip', () => {
     const v: Viewport = { width: 800, height: 600 };
     const radius = 70;
     const c: Camera = { pan: { x: 0, y: 0 }, zoom: 100 };
-    const origin: Star = { id: 1, color: 'Yellow', size: 50, position: { x: 0, y: 0 }, name: 'Origin' };
+    const origin: Star = { id: 1, color: 'Yellow', size: 50, position: { x: 0, y: 0 }, name: 'Origin', system: emptyStarSystem(1) };
     const proj = projectStar(origin, c, v, radius);
     expect(proj.sx).toBe(400);
     expect(proj.sy).toBe(300);
@@ -547,6 +548,7 @@ describe('starmap — projectOrigin', () => {
           size: 0,
           position: { x: 0, y: 0 },
           name: 'Origin',
+          system: emptyStarSystem(0),
         };
         const a = projectOrigin(c, v, 70);
         const b = projectStar(origin, c, v, 70);
@@ -649,7 +651,7 @@ describe('starmap — panTo', () => {
           const radius = 70;
           const s = panTo(initialState, { x, y });
           const proj = projectStar(
-            { id: 1, color: 'Yellow', size: 50, position: { x, y }, name: 'P' },
+            { id: 1, color: 'Yellow', size: 50, position: { x, y }, name: 'P', system: emptyStarSystem(1) },
             s.camera,
             v,
             radius,
@@ -796,7 +798,7 @@ describe('starmap — zoomCameraAround', () => {
           const w0 = unprojectPoint(anchor, s0.camera, v, g.radius);
           // After zooming, that same world point projects back onto the anchor.
           const back = projectStar(
-            { id: 0, color: 'Yellow', size: 50, position: w0, name: 'W0' },
+            { id: 0, color: 'Yellow', size: 50, position: w0, name: 'W0', system: emptyStarSystem(0) },
             s1.camera,
             v,
             g.radius,
@@ -868,6 +870,7 @@ describe('starmap — Quint <-> TS parity', () => {
       color: 'Yellow', size: 50,
       position: { x: 10, y: 0 },
       name: 'S',
+      system: emptyStarSystem(1),
     };
     const c: Camera = { pan: { x: 0, y: 0 }, zoom: 100 };
     const v: Viewport = { width: 800, height: 600 };
@@ -1032,7 +1035,7 @@ describe('starmap — panToVisualCentre', () => {
     // within a few pixels of the visual centre (integer rounding).
     const s = panToVisualCentre(initialState, { x: 7, y: -3 }, v, radius, PANEL_WIDTH_PX);
     const proj = projectStar(
-      { id: 1, color: 'White', size: 5, position: { x: 7, y: -3 }, name: 'X' },
+      { id: 1, color: 'White', size: 5, position: { x: 7, y: -3 }, name: 'X', system: emptyStarSystem(1) },
       s.camera,
       v,
       radius,
@@ -1047,8 +1050,8 @@ describe('starmap — selectStarCentred', () => {
   const g = {
     radius: 70,
     stars: [
-      { id: 1, color: colorLit('White'), size: 5, position: { x: 10, y: -5 }, name: 'A' },
-      { id: 2, color: colorLit('Yellow'), size: 5, position: { x: -8, y: 4 }, name: 'B' },
+      { id: 1, color: colorLit('White'), size: 5, position: { x: 10, y: -5 }, name: 'A', system: emptyStarSystem(1) },
+      { id: 2, color: colorLit('Yellow'), size: 5, position: { x: -8, y: 4 }, name: 'B', system: emptyStarSystem(2) },
     ],
   };
 
@@ -1117,7 +1120,7 @@ describe('starmap — clickEmpty (Iter 2l fix)', () => {
   const g = {
     radius: 70,
     stars: [
-      { id: 1, color: colorLit('White'), size: 5, position: { x: 0, y: 0 }, name: 'A' },
+      { id: 1, color: colorLit('White'), size: 5, position: { x: 0, y: 0 }, name: 'A', system: emptyStarSystem(1) },
     ],
   };
 
@@ -1139,7 +1142,7 @@ describe('starmap — clickEmpty (Iter 2l fix)', () => {
     // The world point under canvas centre is (0, 0); after the click,
     // the camera should be panned so (0, 0) is near the visual centre.
     const proj = projectStar(
-      { id: 1, color: colorLit('White'), size: 5, position: { x: 0, y: 0 }, name: 'A' },
+      { id: 1, color: colorLit('White'), size: 5, position: { x: 0, y: 0 }, name: 'A', system: emptyStarSystem(1) },
       s1.camera,
       v,
       g.radius,
@@ -1174,9 +1177,9 @@ describe('starmap — clickAtPoint (Iter 2l fix)', () => {
   const g = {
     radius: 70,
     stars: [
-      { id: 1, color: colorLit('White'), size: 5, position: { x: 0, y: 0 }, name: 'A' },
-      { id: 2, color: colorLit('Yellow'), size: 5, position: { x: -20, y: 0 }, name: 'B' },
-      { id: 3, color: colorLit('Red'), size: 5, position: { x: 20, y: 0 }, name: 'C' },
+      { id: 1, color: colorLit('White'), size: 5, position: { x: 0, y: 0 }, name: 'A', system: emptyStarSystem(1) },
+      { id: 2, color: colorLit('Yellow'), size: 5, position: { x: -20, y: 0 }, name: 'B', system: emptyStarSystem(2) },
+      { id: 3, color: colorLit('Red'), size: 5, position: { x: 20, y: 0 }, name: 'C', system: emptyStarSystem(3) },
     ],
   };
 
@@ -1240,8 +1243,8 @@ describe('starmap — Quint <-> TS parity for new transitions', () => {
   const g = {
     radius,
     stars: [
-      { id: 1, color: colorLit('White'), size: 5, position: { x: 0, y: 0 }, name: 'A' },
-      { id: 2, color: colorLit('Yellow'), size: 5, position: { x: 10, y: -5 }, name: 'B' },
+      { id: 1, color: colorLit('White'), size: 5, position: { x: 0, y: 0 }, name: 'A', system: emptyStarSystem(1) },
+      { id: 2, color: colorLit('Yellow'), size: 5, position: { x: 10, y: -5 }, name: 'B', system: emptyStarSystem(2) },
     ],
   };
 

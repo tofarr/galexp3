@@ -7,6 +7,7 @@
 
 import { describe, it, expect } from 'vitest';
 import * as fc from 'fast-check';
+import { emptyStarSystem } from './starSystem';
 import {
   GALAXY_SIZES,
   GalaxySize,
@@ -234,6 +235,7 @@ describe('isValidGalaxy — top-level predicate', () => {
           size: 50,
           position: { x: r * 10, y: 0 },
           name: 'Far',
+          system: emptyStarSystem(999),
         },
         ...g.stars.slice(1),
       ],

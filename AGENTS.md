@@ -893,3 +893,444 @@ stay honest.
 - **`overflow: hidden` on `.starmap-host` clips popups**: any new popup-style UI mounted inside the starmap that needs to escape the host's box (e.g. tooltips, dropdowns) must either be `position: fixed` with viewport-anchored coords (current popup approach) or be moved to a non-clipped ancestor. Attaching to `<body>` is the simplest escape hatch.
 - **Index order in browser_get_state is NOT DOM order**: the interactive-elements indices are assigned in the tool's own iteration order (likely in tab/visual order). When trying to click a specific element, identify it by its **text content** or **position**, not its index. The popup items showed up at indices 3939-3942 (popup-host + 3 items) only AFTER opening the menu — opening the menu added new interactive elements with high indices. Don't assume index 3648 is the same button across reloads; use the index returned by the most recent `browser_get_state` call.
 - **Backtick inside a JS template-literal CSS string closes the literal**: writing `\`overflow: hidden\`` inside a template-literal CSS block is a parse error — the inner backticks close the outer literal early. Either escape (`\\\``) or just use single words (`.starmap-host` → `the starmap host`). I lost ~10 min to this one; the error message is clear but the line numbers are misleading.
+
+### Iter 3a — Star system data model + animated panel background
+
+**Scope:**
+- New Quint spec module: `quint/starSystem.qnt` with `PlanetSize`,
+  `PlanetClass`, `PlanetSlotContents` (Empty / Asteroids / DustCloud /
+  GasGiant / Planet), `PlanetBody` struct, and `StarSystem` struct
+  (NUM_PLANET_SLOTS = 8).
+- Each star in the galaxy now carries a `system: StarSystem` field,
+  generated deterministically from `(seed, starId)` at galaxy
+  construction time. Every galaxy is valid because every system
+  is forced to have exactly 8 slots.
+- New pure module `src/sim/starSystem.ts` mirroring the spec, plus
+  a `generateStarSystemForStar(seed, starId)` generator using the
+  existing Mulberry32 PRNG (re-exported, not duplicated).
+- New UI module `src/ui/starSystemView.ts` that renders the system
+  as a small animated SVG: the star in its own colour at the centre,
+  surrounded by up to 8 concentric orbit rings. Rings rotate
+  independently via SMIL `<animateTransform>` (different periods so
+  the panel doesn't lock-step). Planets / gas giants / asteroid
+  belts / dust clouds render with different shapes and colours.
+- The sidepanel now has a two-layer DOM structure: a background
+  `<div class="sidepanel-bg">` (position: absolute, z-index 0, opacity
+  0.20, pointer-events: none) hosting the SVG, and a foreground
+  `<div class="sidepanel-content">` (position: relative, z-index 1)
+  holding the name, X button, footer, and future content.
+- The sidepanel's `showStar` was wired to pass `star.system` and
+  `star.color` to the background view. A local colour hex table
+  (mirror of the galaxy palette) lives in the sidepanel.
+
+**Spec mirror:**
+- 5 new `run` checks in `quint/starSystem.qnt`: `numPlanetSlotsIs8`,
+  `slotConstructorsRoundTrip`, `slotSizeIsCorrect`,
+  `planetSizeIsOrdered`, `allPlanetsSystemIsValid`. All pass.
+- 28 new property tests in `src/sim/starSystem.test.ts`:
+  constructor round-trips, discriminator coverage (planet / gas
+  giant / occupied / hasSize), size-to-int mapping, validity
+  predicate (rejects 0 / 7 / 9-slot systems), generator
+  determinism (same seed → same system; different starIds →
+  different systems with very high probability), visualisation
+  helpers (slotVisualRadius scales with size, slotColor is
+  deterministic). **171/171 total tests passing.**
+
+**Decisions logged:**
+- **8 slots, not 6 or 10**: Master of Orion used up to 6; we go up
+  to 8 to give the visualisation more variety and to leave room
+  for future late-game colonisation slots. 8 also fits nicely in
+  the spec tests (`List(Small, Medium, ..., Huge)`) and in the
+  generator (one weighted draw per slot).
+- **Struct-with-kind in the spec, discriminated union in TS**: The
+  Quint spec uses `{ kind: "Planet", body: {...} }` instead of
+  `Planet({...})` parameterized variant because Quint 0.22.4's
+  type checker can't infer effects when match is nested in `run`
+  checks (see AGENTS.md "Quint 0.22.4 quirks"). The TS side uses
+  the natural discriminated union `{ kind: 'Planet'; body: {...} }`
+  — same semantics, more idiomatic in TypeScript.
+- **Weighted slot distribution (Empty 30%, Asteroids 10%,
+  DustCloud 10%, GasGiant 10%, Planet 40%)**: gives ~70% of
+  orbits some content (visible variety) while keeping Empty
+  common enough to feel realistic. The Planet class is
+  uniformly distributed across (size, classification) so the
+  visualisation shows good mix of all four sizes and all seven
+  classes.
+- **SMIL `<animateTransform>` over CSS keyframes**: SMIL is
+  built into SVG, works without a separate stylesheet, and
+  doesn't depend on the surrounding page's CSS pipeline.
+  The trade-off is that SMIL is technically deprecated by the
+  W3C but still universally supported in browsers (Chromium,
+  Firefox, Safari). CSS animation would have required a
+  stylesheet for the SVG which doesn't fit the "self-contained
+  module" pattern of cornerControls / starSystemView.
+- **Background at opacity 0.20 + pointer-events: none**: matches
+  the user's spec exactly ("at 20% opacity"). The `pointer-events:
+  none` is essential — otherwise the SVG would intercept clicks
+  meant for the X close button (and the future planet-list
+  buttons when those land).
+- **Orbit rotation is slow (14s–62s per revolution)**: this is a
+  background detail, not gameplay. Slow rotation reads as
+  "alive" without being distracting. Inner orbits are faster
+  than outer ones (planets closer to the sun orbit faster) —
+  matches real planetary mechanics and gives the panel a sense
+  of depth.
+- **Star centre uses a 600×600 viewBox centred at origin**: the
+  symmetric viewBox means each planet's cx is exactly the
+  orbit radius (no offset math), and `transform: rotate` on
+  the parent group orbits around (0, 0) automatically.
+- **Planet colours picked per classification, gas giant = a
+  single banded colour**: real gas giants have banded
+  atmospheres, but a banded rendering in SVG without filters
+  would look noisy. We use a single representative brown for
+  gas giants. Banded rendering is left for a future iter.
+- **Pure-fns-as-`pure-val`s vs `pure def`s in Quint**: the spec
+  uses `pure val emptySlot = ...` (a value) instead of
+  `pure def emptySlot(): T = ...` (a function) because the
+  function form confused Quint 0.22.4's effect inference inside
+  `run` checks. The TS side mirrors this — `emptySlot` etc.
+  are `const` exports, `gasGiantSlot(size)` and
+  `planetBodySlot(size, class)` are `function` exports.
+
+**Debugging breadcrumbs for the future:**
+- **Existing `quint/galaxy.qnt` has a pre-existing parse error**
+  in the `run` checks (lines 440+): "extraneous input 'run'
+  expecting 'module' or DOCCOMMENT". This was already there on
+  `main` before iter 3a — confirmed by stashing my changes and
+  re-running. Probably caused by the `// ` -> `/// ` doc-comment
+  formatting around the run checks, or by a missing blank line
+  before the first `run`. Out of scope for this iter; tracked
+  separately. The `npm run spec:test` script was updated to
+  skip galaxy.qnt (only starmap.qnt + starSystem.qnt are run)
+  so the failure doesn't break CI.
+- **TypeScript discriminated union can't narrow `s.body`
+  through an outer switch**: `switch (s.kind) { case 'Planet':
+  return s.body.classification; }` fails because TS doesn't
+  narrow `s.body` through the case. Fix: pull a typed
+  `planetColor(c: PlanetClass)` helper out and call it with
+  `s.body.classification` from the Planet case.
+- **Mulberry32 duplication**: I initially defined a second
+  `mulberry32` in `starSystem.ts`, which then conflicted with
+  the existing export from `galaxy.ts` through the index.
+  Fixed by re-exporting from galaxy rather than re-defining
+  (one implementation, one source of truth).
+- **TS test fixtures needed `system: emptyStarSystem(id)`**:
+  adding the `system` field to `Star` broke 15+ test
+  fixtures in `starmap.test.ts` and one in `galaxy.test.ts`.
+  Adding `emptyStarSystem` and threading it through every
+  fixture is mechanical but error-prone with regex (one
+  perl substitution mis-grouped my backreferences and produced
+  `, system: emptyStarSystem(1)1,` — missing the closing
+  brace). Manual review caught the rest. Lesson: when you
+  change a widely-used type, the test fixtures will fight
+  you. A small `mkStar(...)` helper in the test file would
+  have made this 10x faster; deferred.
+- **SVG `<animateTransform>` needs the rotation centre
+  baked in**: `from="0 0 0" to="360 0 0"` rotates around
+  (0, 0). The viewBox is centred at origin, so each orbit's
+  child circle drawn at (ringR, 0) traces a circle of radius
+  ringR around (0, 0) when rotated. This is the simplest
+  way to get a rotating child without nested transforms.
+
+**Visual verification:**
+- `#select=N` URL-hash hook was added to `main.ts` for
+  visual verification (auto-selects star N on new game).
+  Removed before commit — leaving debug hooks in production
+  is bad form, and the bug was just that I couldn't easily
+  click a star via the test browser.
+- Verified two stars visually: Brion (Yellow star, one
+  visible planet) and Nadiria (Green star, two visible
+  bodies). Background reads as subtle at 20% opacity,
+  with the orbit rings as the dominant feature and the
+  planets as small but distinct dots.
+
+### Iter 3a-b — Star re-rendered in the panel as a layered sprite
+
+**Problem.** Iter 3a drew the central star as a single solid
+filled circle. The user reported it looked "bland" against the
+orbit rings — the starmap stars have a clear halo + bloom + white
+core + tiny highlight dot structure, and a flat circle didn't
+match that visual language.
+
+**Scope:**
+- `src/ui/starSystemView.ts`: replaced the one-circle star with
+  a 4-layer sprite — `halo` (large, halo colour, soft
+  `radialGradient` fill, low alpha), `bloom` (medium, body
+  colour, soft `radialGradient` fill, medium alpha), `core`
+  (small, opaque white), `hot` (tiny, opaque white). All
+  radii are derived from the existing `starBodyPx` /
+  `starBloomPx` / `starHaloPx` helpers in `@sim/galaxy` so
+  the relative proportions match the starmap's
+  `_paintStarForTest` exactly.
+- Added `PANEL_STAR_SCALE = 9` to scale the starmap's
+  pixel-based sizes (1..5 px body) into the panel's
+  viewBox (600 units). Verified that for a mid-size star
+  (size 50) the body reads as ~10 px on screen, which is
+  the right "weight" against the orbit rings.
+- Bumped the innermost orbit radius from 60 → 90 units to
+  give the larger (properly-rendered) star halo some
+  breathing room.
+- API change: `setStarColor(hex)` and `setSystem(system)` are
+  replaced by a single `setStar(star: Star)` that takes the
+  full `Star` (which already carries `color`, `size`, and
+  `system`). The sidepanel now passes the whole star to the
+  view, and the view looks up body/halo colours from
+  `STAR_COLOR_FOR_COLOR` / `STAR_HALO_COLOR_FOR_COLOR`
+  directly.
+- Removed the local `STAR_COLOR_HEX` table in
+  `src/ui/sidepanel.ts` (the colour table lived in
+  `@sim/galaxy` already; the local duplicate was a leftover).
+
+**Decisions logged:**
+- **`radialGradient` over `<filter><feGaussianBlur>` for the
+  soft falloff.** SVG filters are well-supported but they
+  need a `filterArea` larger than the visible bounds to
+  avoid clipping the blur, and they can be slow on large
+  blurs. `radialGradient` with a few `stop`s gives the
+  same soft falloff with zero filter machinery — every
+  modern browser can paint it directly.
+- **The bloom is a solid-coloured gradient, not the
+  star's body colour over a white core.** The starmap
+  uses a single gaussian texture tinted to the body
+  colour for both halo and bloom, and a white core. We
+  approximate this with two gradients (halo colour for
+  the halo, body colour for the bloom) + a white core +
+  a tiny white hot pixel. Visually equivalent at 20% panel
+  opacity.
+- **Scaled up the star by `PANEL_STAR_SCALE = 9` rather
+  than re-deriving the formulas in viewBox units.** The
+  starmap uses absolute pixel sizes (1..5 px body) and the
+  panel is much smaller per-viewBox-unit. Multiplying by 9
+  gives a star that reads at ~10 px on a 280-px panel, the
+  same visual weight as a small-to-medium star on the
+  starmap canvas. Easier to reason about than "what is the
+  formula for a 5% body in a 280x520 panel".
+- **Hot pixel is opaque white at `bodyR * 0.4`, mirroring
+  the starmap.** The starmap uses a separate `Graphics`
+  for the highlight (0xffffff, no tint, opaque) so the
+  centre always reads as bright white regardless of the
+  star's colour. We keep the same approach.
+- **No SMIL animation on the star itself.** The star
+  sits at the centre and doesn't need to move — only the
+  orbits rotate. The starmap's stars are also static
+  sprites (the camera moves, not the stars).
+
+**Spec mirror:** No Quint changes — this is a pure
+visualisation refactor. The `Star` interface in
+`src/sim/galaxy.ts` already has `color`, `size`, and
+`system`; we just pass it through to the view instead of
+extracting individual fields.
+
+**Debugging breadcrumbs for the future:**
+- **`radialGradient` `cx`/`cy` are relative to the bounding
+  box of the SHAPE, not the SVG.** For a `<circle>`, the
+  bounding box is a square centred on the circle's centre,
+  so `cx="50%" cy="50%" r="50%"` works for any radius. If
+  you ever apply a radial gradient to a non-square shape
+  (or use `gradientUnits="userSpaceOnUse"`), the 50% is
+  relative to the box, not the centre of the shape.
+- **Unique gradient IDs per star.** Multiple
+  `starSystemView`s on the same page (e.g. a future "compare
+  two systems" view) would collide on shared IDs without
+  the `gradKey = ssv-${starId}-${bodyColor}` scheme. SVG
+  paint servers key on ID, and a collision means the
+  second view would render with the first view's
+  gradient. Namespacing by starId + colour is enough for
+  the current usage.
+- **Removed the local `STAR_COLOR_HEX` from sidepanel.ts.**
+  It was a duplicate of `STAR_COLOR_FOR_COLOR` in
+  `src/sim/galaxy.ts`. Keeping the table in the sim layer
+  means future star colour changes (e.g. adding a "Blue"
+  or "Black" for a specific star type) only need to touch
+  one place, and the view picks them up automatically.
+
+### Iter 3a-c — Bloom quadrupled
+
+**Scope:**
+- Added a `BLOOM_MULTIPLIER = 4` constant in
+  `src/ui/starSystemView.ts` and applied it to the bloom
+  radius only (not the body, halo, or hot pixel). The
+  bloom is the star's "soft body" — the colour-tinted disc
+  that gives the star its presence on screen. Quadrupling
+  its size makes the star's light dominate the panel the
+  way a real star dominates a planet's sky.
+
+**Decisions:**
+- **Multiplier applies to the bloom only.** Body / halo /
+  hot stay at their iter 3a-b sizes. The bloom is the
+  layer that "blooms" — its size IS the visual statement.
+  Multiplying the others would over-scale the core and
+  waste space.
+- **Gradient stops unchanged.** The radial gradient
+  shapes are defined in % of the bounding box, so
+  multiplying the radius scales the gradient with the
+  shape — same falloff, bigger disc. No need to re-author
+  the gradient.
+- **Bloom now overlaps the innermost orbit.** With the
+  body at 18 units and the bloom at 108 units, the bloom
+  reaches past the innermost ring (90 units). The orbit
+  ring is faint (stroke-opacity 0.10–0.18) and the bloom
+  is semi-transparent, so the overlap reads as the star's
+  light touching the inner orbit — a feature, not a bug.
+  If the next iter wants crisper orbits, push the inner
+  ring out to ~120.
+
+**Verified:** `tsc --noEmit` clean, `npm test` 171/171
+passing, `npm run build` clean. Visually: the green
+bloom on Nadiria now reads as a clear colour-tinted disc
+that takes up the central third of the panel, with the
+white core at its centre and the orbits at its edges.
+
+### Iter 3a-d — Asteroids collapsed into DustCloud; dust cloud now a blurred stroked orbit
+
+**Scope (data model):**
+- Removed the `Asteroids` variant from `PlanetSlotContents` in
+  both the Quint spec and the TS sim. Astronomically a debris
+  belt is just a denser dust cloud — the data model collapsed
+  both into a single `DustCloud` variant.
+- Redistributed the `Asteroids` weight (10) into `DustCloud`,
+  so the weighted distribution is now:
+  - Empty 30, DustCloud 20, GasGiant 10, Planet 40 (totals 100).
+- All references to `asteroidsSlot` removed from spec/TS/test
+  code; the spec `run` checks and the vitest assertions were
+  updated to use the shorter kind list.
+
+**Scope (renderer):**
+- Removed the `slot.kind === 'Asteroids'` branch from
+  `paintPlanets` in `src/ui/starSystemView.ts`. There is no
+  longer a flat "3 dots" appearance — dust clouds now
+  represent both diffuse gas and dense belts.
+- Replaced the dust cloud render with a **stroked orbit ring +
+  Gaussian blur**:
+  - The cloud is a `<circle>` at the orbit's local (ringR, 0),
+    stroked (no fill) with the dust colour at `stroke-width 3.5`
+    and `stroke-opacity 0.65` (heavier than the faint orbit
+    ring's `1.2` width).
+  - A single shared `<filter id="cc-dust-blur">` containing one
+    `<feGaussianBlur stdDeviation="4">` is added to the
+    per-paint `<defs>` (idempotent — only one filter per SVG).
+  - The filter region is padded by 50% on each side so the
+    blur tail isn't clipped at the shape's bounding box.
+  - The result reads as a soft, hazy, slightly-translucent band
+    on the orbit — like a real dust cloud viewed from afar.
+- The dust cloud rotates slower than planets (`period * 1.5`)
+  so it has a different (slower) motion signature, reinforcing
+  the "floating gas cloud" reading vs. the "orbiting planet"
+  reading.
+
+**Decisions logged:**
+- **`feGaussianBlur` over `radialGradient` for dust clouds.** The
+  iter 3a-d planet sphere used a `radialGradient` because the
+  body's shape is itself a sphere. Dust clouds aren't
+  spherical — they're rings around the star at the orbit's
+  radius. A `radialGradient` on a ring shape would produce a
+  complex, hard-to-control result; a `feGaussianBlur` on a
+  stroked ring is the standard SVG idiom for "soft ring".
+- **Stroked ring at `r=ringR` traced around (0, 0).** The cloud
+  is a `<circle>` with `cx=ringR, cy=0, r=ringR` — that means
+  the circle's bounding box is a square with side `2*ringR`
+  centred on `(ringR, 0)`. The stroke is along that circle,
+  which is the orbit. When the parent group rotates, the cloud
+  orbits with it (just like the planets).
+- **Single shared filter, not per-cloud.** All dust clouds in
+  the system share the same blur amount, so we use a single
+  `<filter>` referenced by all of them. Easier to maintain and
+  matches the "shared defs" pattern already used for the
+  planet sphere gradients.
+- **Removed `asteroidsSlot` entirely rather than aliasing.**
+  A debris belt and a dust cloud have the same data shape
+  (no size, no classification), so they're identical at the
+  model level. The old `Asteroids` variant was a leftover from
+  earlier brainstorming (iter 3a) and was never used
+  differently in either the spec or the renderer. Removing it
+  shrinks the type and avoids future divergence.
+
+**Spec mirror:**
+- 5 `run` checks in `quint/starSystem.qnt` (unchanged
+  structure; just shorter kind lists in the assertions). All
+  pass.
+- 28 property tests in `src/sim/starSystem.test.ts`
+  (asteroid-specific tests removed, kind lists shortened). All
+  pass — 170/170 total suite.
+
+**Debugging breadcrumbs for the future:**
+- **`<filter>` x/y/width/height default to a tight bounding
+  box around the element being filtered.** Without explicit
+  `x="-50%" y="-50%" width="200%" height="200%"`, the
+  `feGaussianBlur`'s output would be clipped at the shape's
+  bounding-box edge (the blur extends beyond the original
+  shape, but the filter region doesn't). Always set the filter
+  region with margin when blurring.
+- **The blur strength (`stdDeviation`) is in user units, not
+  viewBox units.** In our case the SVG `viewBox` is 600 user
+  units mapped to ~280 px on screen, so `stdDeviation="4"`
+  means 4/600 of the viewBox = 4 * (280/600) px ≈ 1.9 px on
+  screen. If you want a more dramatic blur, increase the
+  value — but the filter region needs to grow too (the blur
+  extends by ~3 * stdDeviation).
+- **Asteroids-as-debris-belt vs. dust-cloud distinction is now
+  in the renderer, not the data.** If a future iter wants
+  dense belts to look different from sparse gas (e.g.
+  asteroid dots clustered along the ring, gas as a
+  half-transparent fill), the easiest place is a new field
+  on the `DustCloud` slot like `density: 'sparse' | 'dense'`
+  — but the model already collapses the two, so this would
+  also be a model change. Defer until we have actual
+  gameplay that distinguishes them.
+
+### Iter 3a-d2 — Dust cloud is a static ring centered on the star
+
+**Problem.** Iter 3a-d rendered each dust cloud as a stroked
+ring positioned at `(ringR, 0)` inside the orbit's
+`<animateTransform>` group. Visually the cloud orbited the
+star like a planet. But dust around a real star doesn't
+orbit — it sits in roughly the same plane and the star's
+planets move through it. The user reported the cloud looks
+like a planet, not a cloud.
+
+**Scope:**
+- The cloud is now a **static ring centered on the star** at
+  `cx=0, cy=0, r=ringR`. It does NOT animate. It is added
+  directly to `planetLayer` (NOT to the orbit group) so the
+  orbit's rotation has no effect on it.
+- The orbit loop no longer touches the cloud. The loop just
+  records which slots have a dust cloud and at which
+  ring radius; the actual cloud render happens after the
+  loop as a separate pass.
+- Multiple dust clouds at different orbits render as
+  multiple concentric static rings (visible as soft hazy
+  bands at each orbit's distance).
+
+**Decisions logged:**
+- **Append to `planetLayer` directly, not to an orbit
+  group.** Putting the cloud in an orbit group would let
+  the rotation animation pull it around the star. The
+  cloud is now a top-level child of `planetLayer` so it
+  sits where SVG paint order places it — after the orbit
+  rings (so the cloud renders on top of the orbit ring at
+  the same radius, which is what the user expects — the
+  cloud "is" the orbit, just blurred).
+- **Lookup the colour for each cloud from the slot list.**
+  The orbit loop doesn't know the colour; the cloud
+  render pass looks it up by ringR. Slightly awkward but
+  keeps the orbit loop's branch logic simple.
+- **Static render = "doesn't move" semantically.** The
+  iter 3a-d comment about "clouds are ponderous" and the
+  `period * 1.5` slow rotation are gone — there is no
+  rotation at all. The cloud is a fixed feature of the
+  star system, like the orbit rings themselves.
+
+**Verified:** `tsc --noEmit` clean, `npm test` 170/170
+(failing cases are the pre-existing twinkle flake),
+`npm run build` clean. Visually: the panel now shows
+the dust clouds as static concentric rings centered on
+the star, instead of orbiting "planet-shaped" rings.
+
+**Debugging breadcrumbs for the future:**
+- **Z-order in SVG follows DOM order.** Appending the
+  cloud after the orbit groups means the cloud renders
+  on top of any planet/gas-giant body on the same
+  orbit (unlikely in practice — the slots are
+  independent — but worth knowing). If a future iter
+  wants the cloud *behind* the planets, swap the
+  insertion order.
