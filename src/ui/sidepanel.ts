@@ -67,13 +67,6 @@ function injectStyles(): void {
       justify-content: space-between;
       gap: 12px;
     }
-    .sidepanel-header {
-      font-size: 11px;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      color: var(--muted);
-      padding-top: 4px;
-    }
     .sidepanel-close {
       flex-shrink: 0;
       width: 28px;
@@ -169,9 +162,10 @@ export function mountSidePanel(
   const headerRow = document.createElement('div');
   headerRow.className = 'sidepanel-header-row';
 
-  const header = document.createElement('div');
-  header.className = 'sidepanel-header';
-  header.textContent = 'Selection';
+  const nameEl = document.createElement('div');
+  nameEl.id = STAR_NAME_ID;
+  nameEl.className = 'sidepanel-star-name';
+  nameEl.textContent = '—';
 
   const closeBtn = document.createElement('button');
   closeBtn.type = 'button';
@@ -187,13 +181,8 @@ export function mountSidePanel(
     options.onClose?.();
   });
 
-  headerRow.appendChild(header);
+  headerRow.appendChild(nameEl);
   headerRow.appendChild(closeBtn);
-
-  const nameEl = document.createElement('div');
-  nameEl.id = STAR_NAME_ID;
-  nameEl.className = 'sidepanel-star-name';
-  nameEl.textContent = '—';
 
   const empty = document.createElement('div');
   empty.className = 'sidepanel-empty';
@@ -204,7 +193,6 @@ export function mountSidePanel(
   footer.textContent = 'Iteration 2l — planet menu';
 
   panel.appendChild(headerRow);
-  panel.appendChild(nameEl);
   panel.appendChild(empty);
   panel.appendChild(footer);
 

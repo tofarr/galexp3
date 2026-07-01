@@ -853,3 +853,43 @@ stay honest.
 - A dedicated `sidepanel.test.ts` was prototyped but removed because the project has no jsdom/happy-dom installed. The DOM-only behaviour (button.click() → onClose fires) is covered by reading `src/ui/sidepanel.ts` (3 relevant lines). If a future iter needs real DOM test coverage, install jsdom and re-add the file.
 - The `panelWidth` parameter could be computed dynamically from `getBoundingClientRect()` of the panel host rather than hard-coded — deferred until the panel is responsive.
 - A separate iter should give the `Show this menu on click` tooltip the same close affordance visually (currently the X appears; the screen-reader label could be even more descriptive).
+
+### Iter 2m — Corner controls (Menu + Next Turn) + popup menu
+
+**Scope:**
+- Replaced the previous bottom-right "Next Turn" pill button with an icon-only corner-controls group: a Menu button (hamburger icon) on the left, a Next Turn button (play-triangle icon) on the right. Both sit at `bottom: 5px; right: 5px` of the starmap and stay visible above the planet panel (z-index 20 vs panel z-index 10).
+- The Next Turn button now has a `title="Next Turn"` tooltip (browser-native) — the tooltip is dynamic, owned by the host (matches the iter-2c wording contract: "End turn N → start turn N+1").
+- The Menu button opens a popup anchored above the menu button with three items: **Save Game**, **Load Game**, **Exit to Title**. Items are not wired yet — clicking each prints a `console.warn` and sets a status line. Closing affordances: backdrop click, Escape key, menu-item click, menu-button re-click (toggle).
+- Refactored `src/ui/resourceBar.ts`: the next-turn-button concerns moved out of the bar. The bar's API is now `setPool(...)` only (the `nextTurnButtonHost` parameter, the `setNextTurnHandler` / `setNextTurnTooltip` / `nextTurnButton` members, and the `.rb-next-turn-btn` / `.rb-spacer` CSS are all gone).
+
+**New module:** `src/ui/cornerControls.ts` (`mountCornerControls(host)`). Self-contained:
+- Two 32×32 icon buttons in a flex row (mirrors the starmap zoom controls' visual language — same panel/border/hover).
+- Next Turn button keeps the accent-gradient from the previous pill (`linear-gradient(180deg, #1c3a66 0%, #0f1f3a 100%)`) so the "primary action" affordance survives the icon-only redesign.
+- Popup uses `position: fixed` so it can be positioned in viewport coords; anchored to the menu button via `getBoundingClientRect()` on open. Items render below each other, 180 px min-width, panel chrome matching the rest of the UI.
+- Backdrop is a transparent fixed-position click-catcher. Listens on **`mousedown`** (not `click`) — see "Debugging breadcrumbs" below for why.
+
+**HTML / CSS:**
+- `index.html`: `#next-turn-btn-host` CSS bumped from `z-index: 1` to `z-index: 20`, changed from a single-button slot into a `display: flex; flex-direction: row; gap: 5px` row. The id was kept (no markup churn) — both new buttons mount into it.
+- The page-level class is still `next-turn-btn-host`; the module's CSS uses `.cc-host` (applied defensively in JS in case the host class is renamed in a future HTML pass).
+
+**Decisions logged:**
+- **Two buttons, one host** (instead of two hosts). Iter 2d/2g established the "four corner buttons at 5px insets" convention; this iter groups the two bottom-right controls into a single row container rather than splitting them into two absolute hosts. Cleaner CSS (one row, gap: 5px), one z-index to manage.
+- **Icon-only buttons**. The previous "Next Turn" pill was wider than the popup's natural width and read as a CTA rather than a corner affordance. Icon-only buttons match the zoom controls' style and free up horizontal space for the menu button.
+- **Play icon is a filled triangle** (path), the menu icon is three stroked lines. Filled-vs-stroked matches the visual weight difference between the two affordances: the play button is the primary action, the menu is a secondary control.
+- **Popup attaches to `<body>` on open, detaches on close.** The host lives inside `.starmap-host` which has `overflow: hidden` — any popup that opens *upward* from the host would be clipped. The popup uses `position: fixed` (not absolute relative to the host) so it ignores any ancestor clip regions. The DOM element is preserved across opens/closes (item buttons are not rebuilt).
+- **Backdrop is `mousedown` not `click`.** Critical: if the backdrop listened on `click`, the click that *opens* the menu (the same physical gesture) would also fire on the backdrop — its mouseup would close the menu before the user ever sees it. Listening on `mousedown` makes the backdrop inert for the opening gesture (the mousedown already happened on the menu button before the backdrop existed) but reactive to any subsequent click outside.
+- **Position uses `right` + `bottom` (from viewport)** rather than measuring the popup's height to compute `top`. The popup's height depends on font/padding, but `bottom` (distance from viewport bottom) is independent of the popup's own size. Aligns the popup's right edge with the menu button's right edge and its bottom edge 6 px above the menu button's top.
+- **Menu items are identifiers** (`save` / `load` / `exit`), not booleans or callbacks. Future iters can map them to actual save/load/exit implementations without changing the API surface.
+- **No animation on popup open/close** in this iter. A 100 ms fade would polish the experience but it adds CSS rules for one event sequence; defer until there are other "popover" affordances that share the animation.
+- **Host's existing id (`next-turn-btn-host`) is reused** rather than renamed to `corner-controls-host`. The HTML already has the id wired into main.ts; renaming would mean touching every reference. The CSS class was renamed (`.next-turn-btn-host` → `.cc-host` and similar) inside the module's CSS, but the existing page-level rule still applies (same selector). The only HTML edit needed was the `z-index` bump and the `display: flex` switch.
+- **Menu-item handlers log to console + setStatus**. This is the "not connected for now" baseline. The wiring site in `main.ts` is one switch statement, easy to replace when save/load/exit land.
+
+**Spec mirror:**
+- No Quint spec change. The popup menu and corner controls are pure UI affordances — no new game state, no new invariants. When Save/Load/Exit are implemented, those iterations will add Quint state for `SavedGame` records, etc.
+- The host state (`turnNumber`, `resources`) is unchanged in shape — the same `PlayerState` interface in `main.ts`.
+
+**Debugging breadcrumbs for the future:**
+- **Backdrop self-close bug**: the symptom is "the menu opens for a frame and immediately disappears". The fix is to listen on `mousedown` not `click` on the backdrop. The reasoning: the opening gesture's `click` event has its target determined at `mousedown` time (the menu button), but the `mouseup` of the same gesture lands on the backdrop once it's been appended; the resulting `click` event fires on the backdrop and closes the menu. Listening on `mousedown` means the opening gesture is naturally exempt (its `mousedown` predates the backdrop), and any subsequent `mousedown` outside the menu triggers close cleanly.
+- **`overflow: hidden` on `.starmap-host` clips popups**: any new popup-style UI mounted inside the starmap that needs to escape the host's box (e.g. tooltips, dropdowns) must either be `position: fixed` with viewport-anchored coords (current popup approach) or be moved to a non-clipped ancestor. Attaching to `<body>` is the simplest escape hatch.
+- **Index order in browser_get_state is NOT DOM order**: the interactive-elements indices are assigned in the tool's own iteration order (likely in tab/visual order). When trying to click a specific element, identify it by its **text content** or **position**, not its index. The popup items showed up at indices 3939-3942 (popup-host + 3 items) only AFTER opening the menu — opening the menu added new interactive elements with high indices. Don't assume index 3648 is the same button across reloads; use the index returned by the most recent `browser_get_state` call.
+- **Backtick inside a JS template-literal CSS string closes the literal**: writing `\`overflow: hidden\`` inside a template-literal CSS block is a parse error — the inner backticks close the outer literal early. Either escape (`\\\``) or just use single words (`.starmap-host` → `the starmap host`). I lost ~10 min to this one; the error message is clear but the line numbers are misleading.

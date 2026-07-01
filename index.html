@@ -257,11 +257,19 @@
         width: 18px;
         height: 18px;
       }
+      /* Bottom-right corner controls host: holds the Menu button +
+         Next Turn button (mounted via src/ui/cornerControls.ts).
+         Sits above the planet panel (z-index 10) so both buttons
+         stay clickable even when a star is selected. */
       .next-turn-btn-host {
         position: absolute;
         bottom: 5px;
         right: 5px;
-        z-index: 1;
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 5px;
+        z-index: 20;
       }
       .resource-bar-host {
         position: absolute;

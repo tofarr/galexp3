@@ -57,6 +57,11 @@ import { mountStarmap, type StarmapRenderer } from './ui/starmap';
 import { mountSidePanel, type SidePanel } from './ui/sidepanel';
 import { mountNewGameDialog, type NewGameDialog } from './ui/newGameDialog';
 import { mountResourceBar, type ResourceBar, type ResourceKey } from './ui/resourceBar';
+import {
+  mountCornerControls,
+  type CornerControls,
+  type CornerMenuItemId,
+} from './ui/cornerControls';
 
 type AppView = 'menu' | 'game';
 
@@ -174,15 +179,44 @@ function newPlayer(): PlayerState {
 // Resource bar (UI mount)
 // ---------------------------------------------------------------------------
 
-const resourceBar: ResourceBar = mountResourceBar(resourceBarHost, nextTurnBtnHost);
-resourceBar.setNextTurnHandler(() => {
+const resourceBar: ResourceBar = mountResourceBar(resourceBarHost);
+
+// ---------------------------------------------------------------------------
+// Corner controls (Menu button + Next Turn button at bottom-right)
+// ---------------------------------------------------------------------------
+
+const cornerControls: CornerControls = mountCornerControls(nextTurnBtnHost);
+cornerControls.setNextTurnHandler(() => {
   if (!player) return;
   // Placeholder: full turn-resolution lives in a future iteration.
   // For now we just bump the turn counter and clear the status.
   player.turnNumber += 1;
-  resourceBar.setNextTurnTooltip(`End turn ${player.turnNumber - 1} → start turn ${player.turnNumber}`);
+  cornerControls.setNextTurnTooltip(
+    `End turn ${player.turnNumber - 1} → start turn ${player.turnNumber}`,
+  );
   setStatus(`Turn ${player.turnNumber}. (End-of-turn logic not yet implemented.)`, '');
   console.info(`[galexp3] Next Turn pressed; turn=${player.turnNumber}; resources=`, player.resources);
+});
+
+cornerControls.onMenuItem((id: CornerMenuItemId) => {
+  // None of the menu items are wired to actual save/load/exit logic
+  // yet — surface them via the status line + console so it's visible
+  // that the click landed, and so the wiring site is obvious to
+  // whoever implements them next.
+  switch (id) {
+    case 'save':
+      setStatus('Save Game: not yet implemented.', '');
+      console.warn('[galexp3] Menu: Save Game pressed — not yet implemented.');
+      break;
+    case 'load':
+      setStatus('Load Game: not yet implemented.', '');
+      console.warn('[galexp3] Menu: Load Game pressed — not yet implemented.');
+      break;
+    case 'exit':
+      setStatus('Exit to Title: not yet implemented.', '');
+      console.warn('[galexp3] Menu: Exit to Title pressed — not yet implemented.');
+      break;
+  }
 });
 
 function refreshResourceBar(): void {
@@ -190,7 +224,9 @@ function refreshResourceBar(): void {
   resourceBar.setPool(player.resources);
   // Tooltip reflects the upcoming turn: the button will END the
   // current turn and START the next one, so we describe both.
-  resourceBar.setNextTurnTooltip(`End turn ${player.turnNumber} → start turn ${player.turnNumber + 1}`);
+  cornerControls.setNextTurnTooltip(
+    `End turn ${player.turnNumber} → start turn ${player.turnNumber + 1}`,
+  );
 }
 
 // ---------------------------------------------------------------------------

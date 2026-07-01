@@ -18,6 +18,11 @@
  * visually inside the badge; the title attribute text is what the
  * browser tooltip shows.
  *
+ * The Next Turn button used to live here (mounted via an optional
+ * second host arg) but moved out to its own module
+ * (`src/ui/cornerControls.ts`) so the two corner controls could
+ * share a host and a consistent visual language.
+ *
  * Self-contained: injects its own <style> tag (idempotent guard so
  * HMR doesn't duplicate), mounts DOM into the supplied host. The
  * host stays in the page for the game-view lifetime; the bar's
@@ -182,29 +187,6 @@ const CSS = `
     letter-spacing: 0.02em;
     font-variant-numeric: tabular-nums;
   }
-  .rb-spacer {
-    flex: 1;
-  }
-  .rb-next-turn-btn {
-    background: linear-gradient(180deg, #1c3a66 0%, #0f1f3a 100%);
-    color: var(--accent);
-    border: 1px solid var(--accent);
-    padding: 8px 22px;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    transition: background 120ms ease, color 120ms ease;
-  }
-  .rb-next-turn-btn:hover {
-    background: linear-gradient(180deg, #2a4d80 0%, #14284a 100%);
-  }
-  .rb-next-turn-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
 `;
 
 function injectStyles(): void {
@@ -266,27 +248,18 @@ function buildBadge(descriptor: ResourceDescriptor): HTMLSpanElement {
 export interface ResourceBar {
   /** Update the displayed counts. Missing slots fall back to 0. */
   setPool(pool: Partial<Record<ResourceKey, number>>): void;
-  /** Replace the Next Turn button click handler. Pass null to disable. */
-  setNextTurnHandler(handler: (() => void) | null): void;
-  /** Update the Next Turn button's tooltip (browser-native title attr). */
-  setNextTurnTooltip(text: string): void;
-  /** Direct access to the underlying button (for enable/disable). */
-  nextTurnButton: HTMLButtonElement;
 }
 
 /**
- * Mount the resource bar in `host` and (optionally) the
- * Next Turn button in `nextTurnButtonHost`.
+ * Mount the resource bar in `host`. The bar is a single row of
+ * the five resource badges; no other UI is added here.
  *
- * If `nextTurnButtonHost` is provided, the button is mounted
- * there instead of inside the bar — useful for layouts where
- * the button belongs in a different region of the UI (e.g.
- * a starmap corner). If omitted, the button is mounted at
- * the right end of the bar with a flex spacer.
+ * The Next Turn button (and its sibling Menu button) are now
+ * mounted separately via `mountCornerControls` — see
+ * `src/ui/cornerControls.ts`.
  */
 export function mountResourceBar(
   host: HTMLElement,
-  nextTurnButtonHost: HTMLElement | null = null,
 ): ResourceBar {
   injectStyles();
 
@@ -305,29 +278,7 @@ export function mountResourceBar(
     });
   }
 
-  if (!nextTurnButtonHost) {
-    const spacer = document.createElement('span');
-    spacer.className = 'rb-spacer';
-    bar.appendChild(spacer);
-  }
-
   host.appendChild(bar);
-
-  const nextTurnBtn = document.createElement('button');
-  nextTurnBtn.type = 'button';
-  nextTurnBtn.className = 'rb-next-turn-btn';
-  nextTurnBtn.id = 'next-turn-btn';
-  nextTurnBtn.textContent = 'Next Turn';
-  if (nextTurnButtonHost) {
-    nextTurnButtonHost.appendChild(nextTurnBtn);
-  } else {
-    bar.appendChild(nextTurnBtn);
-  }
-
-  let nextTurnHandler: (() => void) | null = null;
-  nextTurnBtn.addEventListener('click', () => {
-    if (nextTurnHandler) nextTurnHandler();
-  });
 
   function setPool(pool: Partial<Record<ResourceKey, number>>): void {
     for (const d of RESOURCE_DESCRIPTORS) {
@@ -339,19 +290,7 @@ export function mountResourceBar(
     }
   }
 
-  function setNextTurnHandler(handler: (() => void) | null): void {
-    nextTurnHandler = handler;
-    nextTurnBtn.disabled = handler === null;
-  }
-
-  function setNextTurnTooltip(text: string): void {
-    nextTurnBtn.title = text;
-  }
-
   return {
     setPool,
-    setNextTurnHandler,
-    setNextTurnTooltip,
-    nextTurnButton: nextTurnBtn,
   };
 }
